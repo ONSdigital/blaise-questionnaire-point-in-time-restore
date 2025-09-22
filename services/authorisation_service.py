@@ -1,6 +1,6 @@
-from Tools.scripts import google
 import google.auth
 from google.auth.transport import requests
+from Tools.scripts import google
 
 
 class AuthorisationService:
