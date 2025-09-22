@@ -15,7 +15,7 @@ connection_model_source = DatabaseConnectionModel(
     database_url="mysql+pymysql://",
     database_username="blaise",
     database_password="6Nf6nOoLPQ96ETpU",
-    database_ip_connection_type=IPTypes.PUBLIC
+    database_ip_connection_type=IPTypes.PUBLIC,
 )
 
 connection_model_destination = DatabaseConnectionModel(
@@ -25,11 +25,13 @@ connection_model_destination = DatabaseConnectionModel(
     database_url="mysql+pymysql://",
     database_username="blaise",
     database_password="6Nf6nOoLPQ96ETpU",
-    database_ip_connection_type=IPTypes.PUBLIC
+    database_ip_connection_type=IPTypes.PUBLIC,
 )
 
 source_database = DatabaseConnectionService(connection_model_source).get_database()
-destination_database = DatabaseConnectionService(connection_model_destination).get_database()
+destination_database = DatabaseConnectionService(
+    connection_model_destination
+).get_database()
 source_session = Session(source_database)
 destination_session = Session(destination_database)
 databaseOrmService = DatabaseOrmService()

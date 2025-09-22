@@ -1,4 +1,3 @@
-
 from google.cloud.sql.connector import Connector
 from sqlalchemy import Engine, create_engine
 
@@ -13,7 +12,7 @@ class DatabaseConnectionService:
         return create_engine(
             url=self._connection_model.database_url,
             creator=self.__get_connection,
-            pool_pre_ping=True
+            pool_pre_ping=True,
         )
 
     def __get_connection(self) -> Connector:

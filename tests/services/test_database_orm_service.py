@@ -15,11 +15,11 @@ class TestOrmFunctionality:
         return DatabaseConnectionModel(
             instance_name="ons-blaise-v2-dev-b4team:europe-west2:bens-clone2",
             database_name="blaise",
-            database_driver="pymysql",
-            database_url="mysql+pymysql://",
             database_username="blaise",
             database_password="6Nf6nOoLPQ96ETpU",
-            database_ip_connection_type=IPTypes.PUBLIC
+            database_ip_connection_type=IPTypes.PUBLIC,
+            database_driver="pymysql",
+            database_url="mysql+pymysql://",        
         )
 
     @pytest.fixture()
@@ -47,10 +47,9 @@ class TestOrmFunctionality:
     def mock_destination_session(self, mock_table):
         return UnifiedAlchemyMagicMock()
 
-    def old_test_get_table_data_returns_expected_data_old(self,
-                                                  service_under_test,
-                                                  mock_table,
-                                                  mock_source_session):
+    def old_test_get_table_data_returns_expected_data_old(
+        self, service_under_test, mock_table, mock_source_session
+    ):
         # arrange
         expected = [900001, 900002, 900003]
 
@@ -61,17 +60,20 @@ class TestOrmFunctionality:
         assert len(actual) == len(expected)
         assert all([a == b for a, b in zip(actual, expected)])
 
-    def old_test_copy_table_data_copies_source_to_destination_old(self,
-                                                          service_under_test,
-                                                          mock_table,
-                                                          mock_source_session,
-                                                          mock_destination_session):
+    def old_test_copy_table_data_copies_source_to_destination_old(
+        self,
+        service_under_test,
+        mock_table,
+        mock_source_session,
+        mock_destination_session,
+    ):
         # arrange
         expected = mock_source_session.query(mock_table).all()
 
         # act
-        service_under_test.copies_table_data(mock_table, mock_source_session, mock_destination_session)
-
+        service_under_test.copies_table_data(
+            mock_table, mock_source_session, mock_destination_session
+        )
 
         # assert
         assert len(mock_destination_session.query(mock_table).all()) == len(expected)
