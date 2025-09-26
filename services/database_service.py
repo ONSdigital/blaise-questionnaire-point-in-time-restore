@@ -20,19 +20,12 @@ class DatabaseService:
         source_table = self.__get_table(source_database_engine, table_name)
         destination_table = self.__get_table(destination_database_engine, table_name)
 
-        with Session(source_database_engine) as source_session:
-            print("source_session ", source_session)
+        with Session(source_database_engine) as source_session, source_session.begin():
             table_data = source_session.execute(source_table.select())
-
-            with Session(destination_database_engine) as destination_session:
-                print("destination_session ", destination_session)
-                destination_session.begin()
-                destination_session.execute(destination_table.delete())
-                for row in table_data:
-                    insert_statement = insert(destination_table).values(row)
-                    print(insert_statement)
-                    destination_session.execute(insert_statement)
-                destination_session.commit()
+        with Session(destination_database_engine) as destination_session, destination_session.begin():
+            destination_session.execute(destination_table.delete())
+            for row in table_data:
+                destination_session.execute(insert(destination_table).values(row))
 
     def __get_database(self, instance_name: str) -> Engine:
         connection = self.__get_connection(instance_name, self._connection_model)
