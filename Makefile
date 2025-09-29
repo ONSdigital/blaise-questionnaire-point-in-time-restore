@@ -8,16 +8,16 @@ show-help:
 .PHONY: format
 ## Format python
 format:
-	@poetry run black .
 	@poetry run isort .
+	@poetry run black .
 
 .PHONY: lint
 ## Run styling checks for python
 lint:
-	@poetry run black --check .
 	@poetry run isort --check .
+	@poetry run black --check .
 	@poetry run flake8 .
-	@poetry run mypy --config-file ${mkfile_dir}/.mypy.ini 
+	@poetry run mypy --config-file ${mkfile_dir}/.mypy.ini .
 
 .PHONY: test
 ## Run unit tests

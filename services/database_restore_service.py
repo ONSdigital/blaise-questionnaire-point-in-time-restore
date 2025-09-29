@@ -1,4 +1,7 @@
-from functions.argument_validation import throw_error_if_empty_list, throw_error_if_empty_string
+from functions.argument_validation import (
+    throw_error_if_empty_list,
+    throw_error_if_empty_string,
+)
 from services.database_service import DatabaseService
 
 
