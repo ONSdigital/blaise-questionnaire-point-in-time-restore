@@ -1,5 +1,3 @@
-import google.auth
-from google.auth.transport import requests
 from Tools.scripts import google
 
 

@@ -19,7 +19,7 @@ class TestOrmFunctionality:
             database_password="6Nf6nOoLPQ96ETpU",
             database_ip_connection_type=IPTypes.PUBLIC,
             database_driver="pymysql",
-            database_url="mysql+pymysql://",        
+            database_url="mysql+pymysql://",
         )
 
     @pytest.fixture()

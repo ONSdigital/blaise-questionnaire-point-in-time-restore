@@ -1,7 +1,7 @@
 import pymysql
 import sqlalchemy
 from google.cloud.sql.connector import Connector
-from sqlalchemy import Engine, MetaData, Table, insert, text
+from sqlalchemy import Engine, MetaData, Table, insert
 from sqlalchemy.orm import Session
 
 from models.database_connection_model import DatabaseConnectionModel
@@ -22,7 +22,9 @@ class DatabaseService:
 
         with Session(source_database_engine) as source_session, source_session.begin():
             table_data = source_session.execute(source_table.select())
-        with Session(destination_database_engine) as destination_session, destination_session.begin():
+        with Session(
+            destination_database_engine
+        ) as destination_session, destination_session.begin():
             destination_session.execute(destination_table.delete())
             for row in table_data:
                 destination_session.execute(insert(destination_table).values(row))

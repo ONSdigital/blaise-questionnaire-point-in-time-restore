@@ -1,10 +1,9 @@
 from unittest.mock import MagicMock, call, patch
 
-from functions.factories.table_factory import TableFactory
 import pytest
 import sqlalchemy
 from google.cloud.sql.connector import Connector, IPTypes
-from sqlalchemy import Table, insert
+from sqlalchemy import Table
 from sqlalchemy.orm import Session
 
 from models.database_connection_model import DatabaseConnectionModel
@@ -32,7 +31,12 @@ class TestCopyFunctionality:
     @patch.object(sqlalchemy, "create_engine")
     @patch.object(Connector, "connect")
     def test_copy_database_table_uses_the_connection_model_to_connect_to_the_database(
-        self, mock_connector, __mock_engine, __mock_session_class, service_under_test, connection_model
+        self,
+        mock_connector,
+        __mock_engine,
+        __mock_session_class,
+        service_under_test,
+        connection_model,
     ):
 
         # arrange
@@ -70,7 +74,12 @@ class TestCopyFunctionality:
     @patch.object(sqlalchemy, "create_engine")
     @patch.object(Connector, "connect")
     def test_copy_database_table_uses_the_connection_model_database_url_to_create_an_engine(
-        self, mock_connector, mock_engine, mock_session_class, service_under_test, connection_model
+        self,
+        mock_connector,
+        mock_engine,
+        mock_session_class,
+        service_under_test,
+        connection_model,
     ):
         # arrange
         table_name = "LMS2301_DD1_FORM"
@@ -83,8 +92,6 @@ class TestCopyFunctionality:
             mock_source_database_connection,
             mock_destination_database_connection,
         ]
-
-
 
         # act
         service_under_test.copy_table_data(
@@ -123,8 +130,6 @@ class TestCopyFunctionality:
     ):
         # arrange
         table_name = "LMS2301_DD1_FORM"
-        table_select = f"select * from {table_name}"
-        table_delete = f"delete * from {table_name}"
         source_instance_name = "b4team:europe-west2:blaise-dev-test-clone"
         destination_instance_name = "blaise-dev-test"
 
@@ -147,8 +152,7 @@ class TestCopyFunctionality:
 
         # assert
         print(mock_session_execute.call_args_list)
-        mock_session_execute.assert_has_calls(expected_calls,any_order=True)
-
+        mock_session_execute.assert_has_calls(expected_calls, any_order=True)
 
     # @patch("sqlalchemy.insert")
     # @patch("services.database_service.Session", autospec=True)
