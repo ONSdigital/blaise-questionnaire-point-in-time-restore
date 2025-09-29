@@ -3,7 +3,8 @@ from sqlalchemy.testing.schema import Table
 
 from functions.factories.table_factory import TableFactory
 from services.database_orm_service2 import DatabaseOrmService2
-from tests.services.fake_database_table_service import FakeDatabaseTableService
+from tests.test_services.fake_database_table_service import FakeDatabaseTableService
+
 
 class TestOrmFunctionality:
 
