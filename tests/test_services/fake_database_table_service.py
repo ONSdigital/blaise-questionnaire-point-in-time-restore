@@ -1,4 +1,6 @@
-from sqlalchemy.testing.schema import Table
+from typing import Any
+
+from sqlalchemy.schema import Table
 
 from services.database_table_service import DatabaseTableService
 
@@ -9,7 +11,7 @@ class FakeDatabaseTableService(DatabaseTableService):
         self._table = table
         # self._database_session = UnifiedAlchemyMagicMock()
         self._instance_name = instance_name
-        self._records = []  # store added records in memory
+        self._records: list[Any] = []  # store added records in memory
 
     @property
     def session(self):
@@ -29,10 +31,10 @@ class FakeDatabaseTableService(DatabaseTableService):
         )
         return list(self._records)
 
-    def add_record(self, record: Table):
+    def add_record(self, record: Table) -> None:
         print(f"Fake service {self._instance_name}: add_record {record.Serial_Number}")
         self._records.append(record)
 
-    def delete_records(self):
+    def delete_records(self) -> None:
         print(f"Fake service {self._instance_name}: delete_records")
         self._records.clear()

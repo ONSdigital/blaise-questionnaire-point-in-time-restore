@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import BIGINT, BLOB, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -9,7 +9,7 @@ from models.base_table import Base
 
 class TableFactory:
     @staticmethod
-    def create_form_table_model(table_name: str):
+    def create_form_table_model(table_name: str) -> Any:
 
         class QuestionnaireFormTable(Base):
 
