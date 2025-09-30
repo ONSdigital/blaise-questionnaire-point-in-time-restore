@@ -14,7 +14,7 @@ class DatabaseService:
 
     def copy_table_data(
         self, table_name: str, source_instance_name: str, destination_instance_name: str
-    ):
+    ) -> None:
         source_database_engine = self.__get_database(source_instance_name)
         destination_database_engine = self.__get_database(destination_instance_name)
         source_table = self.__get_table(source_database_engine, table_name)
@@ -39,7 +39,7 @@ class DatabaseService:
         )
 
     @staticmethod
-    def __get_table(database, table_name: str):
+    def __get_table(database: Engine, table_name: str) -> Table:
         meta_data = MetaData()
         meta_data.reflect(bind=database)
 

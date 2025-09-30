@@ -1,3 +1,5 @@
+from typing import Any
+
 import requests
 from google.auth.transport import requests
 
@@ -10,13 +12,13 @@ class DatabaseCloneService:
         self,
         authorisation_service: AuthorisationService,
         clone_api_url: str,
-        delete_clone_api_url,
+        delete_clone_api_url: str,
     ):
         self._authorisation_service = authorisation_service
         self._clone_api_url = clone_api_url
         self._delete_clone_api_url = delete_clone_api_url
 
-    def create_clone(self, database_clone_model: DatabaseCloneModel):
+    def create_clone(self, database_clone_model: DatabaseCloneModel) -> Any:
         response = requests.post(
             url=self._clone_api_url,
             headers=self.__create_authorisation_headers(),
@@ -31,7 +33,7 @@ class DatabaseCloneService:
         response = requests.delete(url=self._delete_clone_api_url)
         print(response.text)
 
-    def __create_authorisation_headers(self):
+    def __create_authorisation_headers(self) -> Any:
         token = self._authorisation_service.get_credentials_token()
 
         return {
@@ -40,7 +42,7 @@ class DatabaseCloneService:
         }
 
     @staticmethod
-    def __create_clone_request_body(database_clone_model: DatabaseCloneModel):
+    def __create_clone_request_body(database_clone_model: DatabaseCloneModel) -> Any:
         return {
             "cloneContext": {
                 "kind": database_clone_model.source_instance_name,

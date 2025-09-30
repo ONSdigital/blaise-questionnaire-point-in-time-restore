@@ -23,7 +23,7 @@ class TestOrmFunctionality:
         )
 
     @pytest.fixture()
-    def mock_source_database(self, connection_model) -> Engine:
+    def mock_source_database(self, connection_model: DatabaseConnectionModel) -> Engine:
         database_connection_service = DatabaseConnectionService(connection_model)
         return database_connection_service.get_database()
 

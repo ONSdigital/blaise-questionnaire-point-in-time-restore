@@ -11,7 +11,7 @@ class TestRestoreFunctionality:
         return Mock()
 
     @pytest.fixture()
-    def service_under_test(self, mock_database_service) -> DatabaseRestoreService:
+    def service_under_test(self, mock_database_service: Mock) -> DatabaseRestoreService:
         return DatabaseRestoreService(
             database_service=mock_database_service,
         )
