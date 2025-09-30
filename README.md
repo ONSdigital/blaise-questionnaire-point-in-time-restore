@@ -13,15 +13,15 @@ This service helps with PITR, and supports cloning SQL instance from desired Bac
 
 ### Steps to Restore from Backup
 
-# Find the ID of the specifc Backup from which you intend to restore the data:
+1- Find the ID of the specifc Backup from which you intend to restore the data:
 
 ```shell script
 gcloud sql backups list --instance=YOUR_SQL_INSTANCE_NAME
 ```
-# Create a restored instance from the backup identified in the previous step:
-  This can be done from Google Console following this https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring 
+2- Create a restored instance from the backup identified in the previous step:
+  This can be done from Google Cloud Console following this https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring 
 
-# Copy data from specific Questionnaire table of the restored backup instance:
+3- Copy data from specific Questionnaire table of the restored backup instance:
   Create a .env file with all the required environment variables and running main.py:
 
 ```shell script
