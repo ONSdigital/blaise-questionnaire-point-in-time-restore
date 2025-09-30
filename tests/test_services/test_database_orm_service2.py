@@ -18,13 +18,13 @@ class TestOrmFunctionality:
 
     @pytest.fixture()
     def fake_source_database_table_service(
-        self, source_table
+        self, source_table: Table
     ) -> FakeDatabaseTableService:
         return FakeDatabaseTableService(source_table, "source")
 
     @pytest.fixture()
     def fake_destination_database_table_service(
-        self, destination_table
+        self, destination_table: Table
     ) -> FakeDatabaseTableService:
         return FakeDatabaseTableService(destination_table, "destination")
 

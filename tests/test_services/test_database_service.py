@@ -24,7 +24,9 @@ class TestCopyFunctionality:
         )
 
     @pytest.fixture()
-    def service_under_test(self, connection_model) -> DatabaseService:
+    def service_under_test(
+        self, connection_model: DatabaseConnectionModel
+    ) -> DatabaseService:
         return DatabaseService(connection_model=connection_model)
 
     @patch("services.database_service.Session", autospec=True)

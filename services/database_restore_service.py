@@ -12,10 +12,10 @@ class DatabaseRestoreService:
 
     def restore_questionnaire_data(
         self,
-        questionnaire_names: [str],
+        questionnaire_names: list[str],
         source_instance_name: str,
         destination_instance_name: str,
-    ):
+    ) -> None:
 
         throw_error_if_empty_list(questionnaire_names, "questionnaire_names")
         throw_error_if_empty_string(source_instance_name, "source_instance_name")
@@ -34,7 +34,7 @@ class DatabaseRestoreService:
 
     def __restore_tables(
         self, table_names: list[str], source_instance: str, destination_instance: str
-    ):
+    ) -> None:
 
         for table_name in table_names:
             self._database_service.copy_table_data(
