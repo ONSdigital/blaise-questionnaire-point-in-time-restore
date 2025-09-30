@@ -11,6 +11,23 @@ If whole SQL Instance needs to be restored i-e, all the Questionnaires within SQ
 
 This service helps with PITR, and supports cloning SQL instance from desired Backup Instance and copy specific Questionnaire table data to the active SQL Instance's Questionnaire table.
 
+### Steps to Restore from Backup
+
+# Find the ID of the specifc Backup from which you intend to restore the data:
+
+```shell script
+gcloud sql backups list --instance=YOUR_SQL_INSTANCE_NAME
+```
+# Create a restored instance from the backup identified in the previous step:
+  This can be done from Google Console following this https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring 
+
+# Copy data from specific Questionnaire table of the restored backup instance:
+  Create a .env file with all the required environment variables and running main.py:
+
+```shell script
+poetry run python main.py
+```
+
 
 ### Setup for Local development
 
@@ -23,7 +40,7 @@ This service helps with PITR, and supports cloning SQL instance from desired Bac
 | SOURCE_DB_USERNAME            | Valid username of existing user with access to the database.                                                                                                                                                                                                         | `blaise`                        |
 | SOURCE_DB_PASSWORD        | Valid password for the username provided.                                                                                                                                                                                                         | `abcd1234`                        |
 | SOURCE_DB_IP_TYPE        | Determines which IP type the Cloud SQL connector will use. PUBLIC is used if Public IP allowed. However, for PRIVATE IP, it will require VPC access.                                                                                                                                                                                                     | `PUBLIC OR PRIVATE`                   |
-| DEST_INSTANCE_NAME       | Name of the destination SQL instance where we need to copy the data from restored backup instance. | `ons-blaise-v2-dev-rr4:europe-west2:blaise-dev`                     |
+| DEST_INSTANCE_NAME       | Name of the destination SQL instance to receive data from restored backup. | `ons-blaise-v2-dev-rr4:europe-west2:blaise-dev`                     |
 | DEST_DB_NAME          | Name of the database.                                                                                                                                                                | `blaise`                            |
 | DEST_DB_DRIVER           | Python MySQL client library that is used to to communicate with the MySQL database.                                                                                                                                                                    | `pymysql`                |
 | DEST_DB_URL | This is the SQLAlchemy database URL, which tells SQLAlchemy which database type and driver to use                                                                                                                                                                                                                           | `mysql+pymysql://`  |
@@ -58,6 +75,10 @@ TABLE_NAME="LMS2509_KO1_Form"
 ```
 
 This configuration will attempt to restore data for specific Questionnaire i-e, LMS2509_KO1_Form from restored backup instance into actual SQL Instance.
+
+DB_IP_TYPE environment variable for both source and destination SQL instances depend on the Connection Settings in the Google Cloud Console.
+To perform this restore, you might have to allow PUBLIC Connectivity and add you local/current IP Address in the Add Network section for Authorized Access. 
+
 
 ##### Authentication for Successful Restore:
 
@@ -103,7 +124,7 @@ This project includes a `Makefile` with common development commands.
 -   **Restore data for specific Questionnaire:** 
     Execute main.py
     ```bash
-    poetry run python main.py
+    make run
     ```
     
 Copyright (c) 2021 Crown Copyright (Government Digital Service)
