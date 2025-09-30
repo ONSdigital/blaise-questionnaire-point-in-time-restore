@@ -23,7 +23,7 @@ lint:
 	@echo "Running flake8..."
 	@poetry run flake8 .
 	@echo "Running mypy..."
-	@poetry run mypy --config-file ${mkfile_dir}/.mypy.ini --namespace-packages --ignore-missing-imports services functions models tests src
+	@poetry run mypy --config-file ${mkfile_dir}/.mypy.ini .
 
 .PHONY: test
 ## Run unit tests
