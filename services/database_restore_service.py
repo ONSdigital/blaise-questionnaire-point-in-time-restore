@@ -33,7 +33,7 @@ class DatabaseRestoreService:
         )
 
     def __restore_tables(
-        self, table_names: [str], source_instance: str, destination_instance: str
+        self, table_names: list[str], source_instance: str, destination_instance: str
     ):
 
         for table_name in table_names:

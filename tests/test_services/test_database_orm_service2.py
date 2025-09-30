@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy.testing.schema import Table
+from sqlalchemy import Table
 
 from functions.factories.table_factory import TableFactory
 from services.database_orm_service2 import DatabaseOrmService2
