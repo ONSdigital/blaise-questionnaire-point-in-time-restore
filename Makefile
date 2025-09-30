@@ -29,3 +29,9 @@ lint:
 ## Run unit tests
 test:
 	@poetry run python -m pytest -vvv
+
+.PHONY: run
+## Run main.py
+run:
+	@echo "Starting data restore..."
+	@poetry run python main.py
