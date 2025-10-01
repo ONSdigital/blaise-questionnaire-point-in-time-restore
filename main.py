@@ -37,18 +37,16 @@ destination_session = Session(destination_database)
 databaseOrmService = DatabaseOrmService()
 
 source_table_model = TableFactory.create_form_table_model(Settings.TABLE_NAME)
-databaseOrmService.get_case_ids(source_table_model, source_session)
 
-# destination_table_model = TableFactory.create_form_table_model("LMS2310_GP1_Form")
+destination_table_model = TableFactory.create_form_table_model(Settings.TABLE_NAME)
 
-# databaseOrmService.get_case_ids(source_table_model, source_session)
-# databaseOrmService.get_case_ids(source_table_model, destination_session)
+databaseOrmService.copies_table_data(
+    Settings.TABLE_NAME, source_table_model, source_session, destination_session
+)
 
-# databaseOrmService.copies_table_data(source_table_model, source_session, destination_session)
 
+# another variant of the similar pitr, to-be-explored in follow-up tickets
 # source_database_table_service = DatabaseTableService(source_table_model, source_session)
 # destination_database_table_service = DatabaseTableService(source_table_model, destination_session)
-
 # databaseOrmService2 = DatabaseOrmService2()
-
 # databaseOrmService2.copies_table_data(source_database_table_service, destination_database_table_service)
