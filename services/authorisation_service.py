@@ -1,6 +1,9 @@
 from typing import Any
 
+from dotenv import load_dotenv
 from Tools.scripts import google
+
+load_dotenv()
 
 
 class AuthorisationService:
