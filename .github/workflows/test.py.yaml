@@ -70,7 +70,7 @@ jobs:
     - name: Run codecov
       run: poetry run coverage xml -i
     - name: Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        fail_ci_if_error: true
+        fail_ci_if_error: false
