@@ -29,10 +29,12 @@ class TestCopyFunctionality:
     ) -> DatabaseService:
         return DatabaseService(connection_model=connection_model)
 
-    mock_creds = MagicMock()
-    mock_creds.universe_domain = "googleapis.com"
+    @pytest.fixture
+    def mock_creds(self):
+        creds = MagicMock()
+        creds.universe_domain = "googleapis.com"
+        return creds
 
-    @patch("google.auth.default", return_value=(mock_creds, "gcp-project"))
     @patch("services.database_service.Session", autospec=True)
     @patch.object(sqlalchemy, "create_engine")
     @patch.object(Connector, "connect")
@@ -52,9 +54,10 @@ class TestCopyFunctionality:
         destination_instance_name = "blaise-dev-test"
 
         # act
-        service_under_test.copy_table_data(
-            table_name, source_instance_name, destination_instance_name
-        )
+        with patch("google.auth.default", return_value=(mock_creds, "gcp-project")):
+            service_under_test.copy_table_data(
+                table_name, source_instance_name, destination_instance_name
+            )
 
         # assert
         mock_connector.assert_has_calls(
@@ -77,7 +80,6 @@ class TestCopyFunctionality:
             any_order=True,
         )
 
-    @patch("google.auth.default", return_value=(mock_creds, "gcp-project"))
     @patch("services.database_service.Session", autospec=True)
     @patch.object(sqlalchemy, "create_engine")
     @patch.object(Connector, "connect")
@@ -103,9 +105,10 @@ class TestCopyFunctionality:
         ]
 
         # act
-        service_under_test.copy_table_data(
-            table_name, source_instance_name, destination_instance_name
-        )
+        with patch("google.auth.default", return_value=(mock_creds, "gcp-project")):
+            service_under_test.copy_table_data(
+                table_name, source_instance_name, destination_instance_name
+            )
 
         # assert
         mock_engine.assert_has_calls(
@@ -124,10 +127,6 @@ class TestCopyFunctionality:
         )
 
     
-    
-
-    
-    @patch("google.auth.default", return_value=(mock_creds, "gcp-project"))
     @patch.object(Table, "delete")
     @patch.object(Table, "select")
     @patch.object(Session, "execute")
@@ -140,7 +139,7 @@ class TestCopyFunctionality:
         mock_session_execute,
         mock_table_select,
         mock_table_delete,
-        __mock_auth,
+        mock_creds,
         service_under_test,
     ):
         # arrange
@@ -161,9 +160,10 @@ class TestCopyFunctionality:
             call(mock_table_delete.return_value),
         ]
         # act
-        service_under_test.copy_table_data(
-            table_name, source_instance_name, destination_instance_name
-        )
+        with patch("google.auth.default", return_value=(mock_creds, "gcp-project")):
+            service_under_test.copy_table_data(
+                table_name, source_instance_name, destination_instance_name
+            )
 
         # assert
         print(mock_session_execute.call_args_list)
