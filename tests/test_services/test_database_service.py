@@ -126,7 +126,6 @@ class TestCopyFunctionality:
             ]
         )
 
-    
     @patch.object(Table, "delete")
     @patch.object(Table, "select")
     @patch.object(Session, "execute")
@@ -168,4 +167,3 @@ class TestCopyFunctionality:
         # assert
         print(mock_session_execute.call_args_list)
         mock_session_execute.assert_has_calls(expected_calls, any_order=True)
-
