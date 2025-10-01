@@ -1,15 +1,20 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Type
 
 from sqlalchemy import BIGINT, BLOB, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.base_table import Base
 
+_model_cache: dict[str, Type[Base]] = {}
+
 
 class TableFactory:
+
     @staticmethod
     def create_form_table_model(table_name: str) -> Any:
+        if table_name in _model_cache:
+            return _model_cache[table_name]
 
         class QuestionnaireFormTable(Base):
 
@@ -29,4 +34,5 @@ class TableFactory:
             LastModification: Mapped[Optional[datetime]] = mapped_column(DateTime())
             DataStream = mapped_column(BLOB())
 
+        _model_cache[table_name] = QuestionnaireFormTable
         return QuestionnaireFormTable
