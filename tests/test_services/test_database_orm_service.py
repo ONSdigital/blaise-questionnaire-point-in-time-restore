@@ -13,10 +13,10 @@ class TestOrmFunctionality:
     @pytest.fixture()
     def connection_model(self):
         return DatabaseConnectionModel(
-            instance_name="ons-blaise-v2-dev-b4team:europe-west2:bens-clone2",
-            database_name="blaise",
+            instance_name="gcp-project:europe-west2:bens-clone2",
+            database_name="database",
             database_username="blaise",
-            database_password="6Nf6nOoLPQ96ETpU",
+            database_password="password",
             database_ip_connection_type=IPTypes.PUBLIC,
             database_driver="pymysql",
             database_url="mysql+pymysql://",
