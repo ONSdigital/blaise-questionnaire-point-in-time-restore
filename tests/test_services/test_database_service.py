@@ -14,8 +14,8 @@ class TestCopyFunctionality:
     @pytest.fixture()
     def connection_model(self):
         return DatabaseConnectionModel(
-            instance_name="ons-blaise-v2-dev-b4team:europe-west2:bens-clone2",
-            database_name="blaise",
+            instance_name="gcp-project:europe-west2:bens-clone2",
+            database_name="database",
             database_username="blaise_user",
             database_password="password_12345",
             database_driver="pymsql",
