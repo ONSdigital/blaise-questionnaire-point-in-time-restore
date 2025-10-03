@@ -69,10 +69,13 @@ class TestOrmFunctionality:
     ):
         # arrange
         expected = mock_source_session.query(mock_table).all()
-        
+
         # act
         service_under_test.copies_table_data(
-             "LMS2310_GP1_Form",mock_table, mock_source_session, mock_destination_session
+            "LMS2310_GP1_Form",
+            mock_table,
+            mock_source_session,
+            mock_destination_session,
         )
 
         # assert
