@@ -12,14 +12,14 @@ class DatabaseTableService:
     def session(self) -> Session:
         return self._database_session
 
-    def get_records(self) -> [Table]:
+    def get_records(self) -> list[Table]:
         print("Real service: get_records")
         return self._database_session.query(self._table).all()
 
-    def add_record(self, record: Table):
+    def add_record(self, record: Table) -> None:
         print("Real service: add_record")
         self._database_session.merge(record)
 
-    def delete_records(self):
+    def delete_records(self) -> None:
         print("Real service: delete_records")
         pass
