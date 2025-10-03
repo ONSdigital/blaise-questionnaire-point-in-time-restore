@@ -24,8 +24,8 @@ class DatabaseOrmService:
         with source_database_session.begin():
             table_rows = source_database_session.query(table).all()
 
-        print("Merging records in destination table...")
-        with destination_database_session.begin():
-            for table_row in table_rows:
-                destination_database_session.merge(table_row)
-        print(f"Successfully restored data for {table_name}...")
+            print("Merging records in destination table...")
+            with destination_database_session.begin():
+                for table_row in table_rows:
+                    destination_database_session.merge(table_row)
+            print(f"Successfully restored data for {table_name}...")
