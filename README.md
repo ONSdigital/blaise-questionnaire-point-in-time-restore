@@ -1,130 +1,139 @@
-# Blaise Point In Time Restore
-This Python Service provides functionality to perform Blaise Point in time restore.  
+# Blaise Point-in-Time Restore
 
+This Python service provides functionality to perform a point-in-time restore for specific Blaise questionnaire data. It is designed to copy table data from a restored Google Cloud SQL backup instance to a live Blaise SQL instance.
 
+This tool is useful when you need to restore data for a single questionnaire without performing a full database restore. For a full instance restore, it is recommended to use the Google Cloud Console.
 
-[![codecov](https://codecov.io/gh/ONSdigital/blaise-point-in-time-restore/branch/main/graph/badge.svg)](https://codecov.io/gh/ONSdigital/blaise-point-in-time-restore)
-[![CI status](https://github.com/ONSdigital/blaise-point-in-time-restore/workflows/Test%20coverage%20report/badge.svg)](https://github.com/ONSdigital/blaise-point-in-time-restore/workflows/Test%20coverage%20report/badge.svg)
-<img src="https://img.shields.io/github/release/ONSdigital/blaise-point-in-time-restore.svg?style=flat-square" alt="Blaise Point In Time Restore release verison">
+## How it Works
 
-If whole SQL Instance needs to be restored i-e, all the Questionnaires within SQL Instance, recommended solution is to perform restore from Google Cloud Console. https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring
+The service performs the following steps:
 
-This service helps with PITR, and supports cloning SQL instance from desired Backup Instance and copy specific Questionnaire table data to the active SQL Instance's Questionnaire table.
+1.  **Connects to Databases:** Establishes a connection to both the source (restored backup) and destination (live) Google Cloud SQL for MySQL instances using the Cloud SQL Python Connector.
+2.  **Reads Configuration:** Reads database connection details and the target table name from environment variables.
+3.  **Copies Data:** Copies the data from the specified table in the source database to the corresponding table in the destination database using SQLAlchemy.
 
-### Steps to Restore from Backup
+## Prerequisites
 
-1- Find the ID of the specifc Backup from which you intend to restore the data:
+-   Python 3.13+
+-   [Poetry](https://python-poetry.org/) for dependency management
+-   [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` CLI) installed and authenticated
 
-```shell script
-gcloud sql backups list --instance=YOUR_SQL_INSTANCE_NAME
+## Setup & Configuration
+
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository-url>
+    cd blaise-point-in-time-restore
+    ```
+
+2.  **Install dependencies:**
+    ```bash
+    poetry install
+    ```
+
+3.  **Authenticate with Google Cloud:**
+    You need to authenticate your local environment to access Google Cloud resources.
+
+    ```bash
+    gcloud auth application-default login
+    gcloud config set project <GCP_PROJECT_ID>
+    ```
+
+4.  **Create a `.env` file:**
+    Create a `.env` file in the root of the project with your specific configuration.
+
+### Environment Variables
+
+| Variable | Description |
+| --- | --- |
+| `SOURCE_INSTANCE_NAME` | The connection name of the source Cloud SQL instance (the restored backup). |
+| `SOURCE_DB_NAME` | The name of the source database. |
+| `SOURCE_DB_DRIVER` | The Python MySQL client library to use (e.g., `pymysql`). |
+| `SOURCE_DB_URL` | The SQLAlchemy database URL prefix. |
+| `SOURCE_DB_USERNAME` | The username for the source database. |
+| `SOURCE_DB_PASSWORD` | The password for the source database user. |
+| `SOURCE_DB_IP_TYPE` | The IP type for the Cloud SQL connector (`PUBLIC` or `PRIVATE`). Requires VPC access for `PRIVATE`. |
+| `DEST_INSTANCE_NAME` | The connection name of the destination Cloud SQL instance (the live instance). |
+| `DEST_DB_NAME` | The name of the destination database. |
+| `DEST_DB_DRIVER` | The Python MySQL client library to use. |
+| `DEST_DB_URL` | The SQLAlchemy database URL prefix. |
+| `DEST_DB_USERNAME` | The username for the destination database. |
+| `DEST_DB_PASSWORD` | The password for the destination database user. |
+| `DEST_DB_IP_TYPE` | The IP type for the Cloud SQL connector (`PUBLIC` or `PRIVATE`). |
+| `TABLE_NAME` | The name of the questionnaire table to restore. |
+
+**Note:** To perform the restore, you may need to authorise your local IP address in the "Authorized Networks" section of your Cloud SQL instances if you are using a `PUBLIC` IP connection.
+
+Example `.env` file:
+
 ```
-2- Create a restored instance from the backup identified in the previous step:
-  This can be done from Google Cloud Console following this https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring 
+# Source Database (Restored Backup)
+SOURCE_INSTANCE_NAME="your-gcp-project:your-region:your-restored-instance-name"
+SOURCE_DB_NAME="blaise"
+SOURCE_DB_DRIVER="pymysql"
+SOURCE_DB_URL="mysql+pymysql://"
+SOURCE_DB_USERNAME="your-db-user"
+SOURCE_DB_PASSWORD="your-db-password"
+SOURCE_DB_IP_TYPE="PUBLIC" # or PRIVATE
 
-3- Copy data from specific Questionnaire table of the restored backup instance:
-  Create a .env file with all the required environment variables and running main.py:
+# Destination Database (Live)
+DEST_INSTANCE_NAME="your-gcp-project:your-region:your-live-instance-name"
+DEST_DB_NAME="blaise"
+DEST_DB_DRIVER="pymysql"
+DEST_DB_URL="mysql+pymysql://"
+DEST_DB_USERNAME="your-db-user"
+DEST_DB_PASSWORD="your-db-password"
+DEST_DB_IP_TYPE="PUBLIC" # or PRIVATE
 
-```shell script
-poetry run python main.py
-```
-
-
-### Setup for Local development
-
-| Environment Variable | Description                                                                                                                                                                                                                                    | Example                            |
-|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|
-| SOURCE_INSTANCE_NAME   | Name of the source SQL instance created from backup.                                                                                                                                                                            | `ons-blaise-v2-dev-rr4:europe-west2:blaise-dev-backup-restore`                         |
-| SOURCE_DB_NAME    | Name of the database.                                                                                                                                                                                    | `blaise`             |
-| SOURCE_DB_DRIVER     | Python MySQL client library that is used to to communicate with the MySQL database.                                                                                                                          | `pymysql`         |
-| SOURCE_DB_URL            | This is the SQLAlchemy database URL, which tells SQLAlchemy which database type and driver to use.                                                                                                                                                                                                         | `mysql+pymysql://`                               |
-| SOURCE_DB_USERNAME            | Valid username of existing user with access to the database.                                                                                                                                                                                                         | `blaise`                        |
-| SOURCE_DB_PASSWORD        | Valid password for the username provided.                                                                                                                                                                                                         | `abcd1234`                        |
-| SOURCE_DB_IP_TYPE        | Determines which IP type the Cloud SQL connector will use. PUBLIC is used if Public IP allowed. However, for PRIVATE IP, it will require VPC access.                                                                                                                                                                                                     | `PUBLIC OR PRIVATE`                   |
-| DEST_INSTANCE_NAME       | Name of the destination SQL instance to receive data from restored backup. | `ons-blaise-v2-dev-rr4:europe-west2:blaise-dev`                     |
-| DEST_DB_NAME          | Name of the database.                                                                                                                                                                | `blaise`                            |
-| DEST_DB_DRIVER           | Python MySQL client library that is used to to communicate with the MySQL database.                                                                                                                                                                    | `pymysql`                |
-| DEST_DB_URL | This is the SQLAlchemy database URL, which tells SQLAlchemy which database type and driver to use                                                                                                                                                                                                                           | `mysql+pymysql://`  |
-| DEST_DB_USERNAME     | Valid username of existing user with access to the database.                                                                                                           | `blaise` |
-| DEST_DB_PASSWORD        | Valid password for the username provided.                                                                                                                                                                                                         | `abcd1234`                        |
-| SOURCE_DB_IP_TYPE        | Determines which IP type the Cloud SQL connector will use. PUBLIC is used if Public IP allowed. However, for PRIVATE IP, it will require VPC access.                                                                                                                                                                                                     | `PUBLIC OR PRIVATE`                   |
-| TABLE_NAME        | Name of the Questionnaire Table that needs to be restored from restored backup instance.                                                                                                                                                               | `LMS2509_KO1_Form`                   |
-
-Create a .env file with the following environment variables:
-
-```
-# Source database
-SOURCE_INSTANCE_NAME=ons-blaise-v2-dev-rr4:europe-west2:blaise-dev-restored-backup
-SOURCE_DB_NAME=database
-SOURCE_DB_DRIVER=pymysql
-SOURCE_DB_URL=mysql+pymysql://
-SOURCE_DB_USERNAME=blaise
-SOURCE_DB_PASSWORD=abcd1234
-SOURCE_DB_IP_TYPE=PUBLIC
-
-# Destination database
-DEST_INSTANCE_NAME=gcp-project:europe-west2:blaise-dev-actual
-DEST_DB_NAME=database
-DEST_DB_DRIVER=pymysql
-DEST_DB_URL=mysql+pymysql://
-DEST_DB_USERNAME=user
-DEST_DB_PASSWORD=abcd1234
-DEST_DB_IP_TYPE=PUBLIC
-
-# Common table name for restore
+# Table to Restore
 TABLE_NAME="LMS2509_KO1_Form"
 ```
 
-This configuration will attempt to restore data for specific Questionnaire i-e, LMS2509_KO1_Form from restored backup instance into actual SQL Instance.
+## Usage
 
-DB_IP_TYPE environment variable for both source and destination SQL instances depend on the Connection Settings in the Google Cloud Console.
-To perform this restore, you might have to allow PUBLIC Connectivity and add you local/current IP Address in the Add Network section for Authorized Access. 
+Follow these steps to perform a point-in-time restore for a specific questionnaire.
 
+### 1. Find the Backup ID
 
-##### Authentication for Successful Restore:
-
-Run the following gcloud command to authenticate from local VS code terminal to successfully run the python code: 
+List the available backups for your SQL instance to find the ID of the backup you want to restore from.
 
 ```bash
-gcloud auth application-default login
+gcloud sql backups list --instance=YOUR_SQL_INSTANCE_NAME
 ```
 
-Then set the intented GCP project in the config by running following command:
+### 2. Create a Restored Instance
+
+Create a new Cloud SQL instance from the selected backup using the Google Cloud Console. Follow the official documentation: [Restoring a Cloud SQL instance](https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring).
+
+### 3. Run the Restore Script
+
+Once the new instance is running and you have configured your `.env` file, run the script to copy the data.
+
 ```bash
-gcloud config set project <GCP_PROJECT_ID>
+poetry run python main.py
+```
+Or using the Makefile:
+```bash
+make run
 ```
 
-##### Install dependencies:
+The script will copy the data for the specified `TABLE_NAME` from the source to the destination instance.
 
-```
-poetry install
-```
+## Development
 
-## Running Development Tasks
+This project includes a `Makefile` with commands for common development tasks.
 
-This project includes a `Makefile` with common development commands.
-
--   **Format:**
-    Formats the code.
+-   **Format Code:**
     ```bash
     make format
     ```
 
--   **Lint:**
-    Checks code quality.
+-   **Lint Code:**
     ```bash
     make lint
     ```
 
--   **Test:**
-    Executes test suite.
+-   **Run Tests:**
     ```bash
     make test
     ```
-
--   **Restore data for specific Questionnaire:** 
-    Execute main.py
-    ```bash
-    make run
-    ```
-    
-Copyright (c) 2021 Crown Copyright (Government Digital Service)
