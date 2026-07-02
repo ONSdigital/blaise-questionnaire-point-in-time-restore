@@ -3,24 +3,24 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.13"
-sqlalchemy = "^2.0.43"
-pymysql = "^1.1.2"
-cloud-sql-python-connector = "^1.18.4"
-functions-framework = "^3.10.0"
-requests = "^2.32.5"
-google-auth = "^2.40.3"
-python-dotenv = "^1.1.1"
+sqlalchemy = "^2.0.51"
+pymysql = "^1.2.0"
+cloud-sql-python-connector = "^1.20.4"
+functions-framework = "^3.10.2"
+requests = "^2.34.2"
+google-auth = "^2.55.1"
+python-dotenv = "^1.2.2"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^9.0.1"
-mypy = "^1.6.1"
-mock = "^5.1.0"
-isort = "^7.0.0"
+pytest = "^9.1.1"
+mypy = "^2.1.0"
+mock = "^5.2.0"
+isort = "^8.0.1"
 flake8 = "^7.3.0"
 flake8-cognitive-complexity = "^0.1.0"
-black = "^25.11.0"
+black = "^26.5.1"
 mock-alchemy = "^0.2.6"
-pytest-cov = "^7.0.0"
+pytest-cov = "^7.1.0"
 
 [tool.isort]
 profile = "black"

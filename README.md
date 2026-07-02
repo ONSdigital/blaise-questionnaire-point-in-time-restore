@@ -1,8 +1,6 @@
-# Blaise Point-in-Time Restore
+# Blaise Table Point-in-Time Restore
 
-This Python service provides functionality to perform a point-in-time restore for specific Blaise questionnaire data. It is designed to copy table data from a restored Google Cloud SQL backup instance to a live Blaise SQL instance.
-
-This tool is useful when you need to restore data for a single questionnaire without performing a full database restore. For a full instance restore, it is recommended to use the Google Cloud Console.
+Provides functionality to perform a point-in-time restore for specific Blaise questionnaire data table. Full database restores should be done via the GCP console.
 
 ## How it Works
 
