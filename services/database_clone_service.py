@@ -1,7 +1,6 @@
 from typing import Any
 
 import requests
-from google.auth.transport import requests
 
 from models.database_clone_model import DatabaseCloneModel
 from services.authorisation_service import AuthorisationService
