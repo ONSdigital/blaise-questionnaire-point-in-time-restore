@@ -1,33 +1,53 @@
-[tool.poetry]
-package-mode = false
-
-[tool.poetry.dependencies]
-python = "^3.13"
-sqlalchemy = "^2.0.51"
-pymysql = "^1.2.0"
-cloud-sql-python-connector = "^1.20.4"
-functions-framework = "^3.10.2"
-requests = "^2.34.2"
-google-auth = "^2.55.1"
-python-dotenv = "^1.2.2"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^9.1.1"
-mypy = "^2.1.0"
-mock = "^5.2.0"
-isort = "^8.0.1"
-flake8 = "^7.3.0"
-flake8-cognitive-complexity = "^0.1.0"
-black = "^26.5.1"
-mock-alchemy = "^0.2.6"
-pytest-cov = "^7.1.0"
-
-[tool.isort]
-profile = "black"
-line_length = 88
-multi_line_output = 3
-include_trailing_comma = true
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
+
+[project]
+name = "blaise-questionnaire-point-in-time-restore"
+requires-python = ">=3.13,<4.0"
+dependencies = [
+	"sqlalchemy>=2.0.51",
+	"pymysql>=1.2.0",
+	"cloud-sql-python-connector>=1.20.4",
+	"functions-framework>=3.10.2",
+	"flask>=3.1.2",
+	"requests>=2.34.2",
+	"google-auth>=2.55.2",
+	"google-cloud-secret-manager>=2.25.0",
+	"google-cloud-logging (>=3.16.1,<4.0.0)",
+]
+
+[dependency-groups]
+dev = [
+	"pytest>=9.1.1",
+	"mock>=5.2.0",
+	"ruff>=0.15.20",
+	"pyright>=1.1.411",
+	"vulture>=2.16",
+	"mock-alchemy>=0.2.6",
+	"pytest-cov>=7.1.0",
+	"deptry>=0.25.1",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "PL", "C90", "SIM", "RUF", "Q"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+reportUnknownParameterType = false
+reportMissingParameterType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+
+[tool.vulture]
+min_confidence = 70
+
+[tool.pytest.ini_options]
+addopts = "--cov=. --cov-report=term-missing"
+
+[tool.coverage.report]
+omit = ["tests/*"]

@@ -1,20 +1,30 @@
-from sqlalchemy.orm import Session
+import atexit
+import logging
+import time
+import uuid
 
-from config import Settings
-from functions.factories.table_factory import TableFactory
+import flask
+import google.cloud.logging
+
+from config import Settings, parse_uk_local_timestamp
 from models.database_connection_model import DatabaseConnectionModel
-from services.database_connection_service import DatabaseConnectionService
-from services.database_orm_service import DatabaseOrmService
-
-connection_model_source = DatabaseConnectionModel(
-    instance_name=Settings.SOURCE_INSTANCE_NAME,
-    database_name=Settings.SOURCE_DB_NAME,
-    database_driver=Settings.SOURCE_DB_DRIVER,
-    database_url=Settings.SOURCE_DB_URL,
-    database_username=Settings.SOURCE_DB_USERNAME,
-    database_password=Settings.SOURCE_DB_PASSWORD,
-    database_ip_connection_type=Settings.SOURCE_DB_IP_TYPE,
+from services.authorisation_service import AuthorisationService
+from services.database_clone_service import DatabaseCloneService
+from services.database_restore_service import DatabaseRestoreService
+from services.database_service import DatabaseService
+from services.pitr_orchestrator_service import (
+    PitrOrchestratorService,
+    PitrRequest,
+    build_clone_instance_name,
 )
+
+try:
+    _logging_client = google.cloud.logging.Client(project=Settings.DEST_PROJECT_ID)
+    _logging_client.setup_logging()
+    atexit.register(_logging_client.close)
+except Exception:
+    logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
 connection_model_destination = DatabaseConnectionModel(
     instance_name=Settings.DEST_INSTANCE_NAME,
@@ -23,30 +33,162 @@ connection_model_destination = DatabaseConnectionModel(
     database_url=Settings.DEST_DB_URL,
     database_username=Settings.DEST_DB_USERNAME,
     database_password=Settings.DEST_DB_PASSWORD,
-    database_ip_connection_type=Settings.DEST_DB_IP_TYPE,
 )
 
-source_database = DatabaseConnectionService(connection_model_source).get_database()
-destination_database = DatabaseConnectionService(
-    connection_model_destination
-).get_database()
-
-source_session = Session(source_database)
-destination_session = Session(destination_database)
-
-databaseOrmService = DatabaseOrmService()
-
-source_table_model = TableFactory.create_form_table_model(Settings.TABLE_NAME)
-
-destination_table_model = TableFactory.create_form_table_model(Settings.TABLE_NAME)
-
-databaseOrmService.copies_table_data(
-    Settings.TABLE_NAME, source_table_model, source_session, destination_session
+database_service = DatabaseService(connection_model_destination)
+database_restore_service = DatabaseRestoreService(database_service)
+authorisation_service = AuthorisationService()
+clone_service = DatabaseCloneService(
+    authorisation_service=authorisation_service,
+    project_id=Settings.DEST_PROJECT_ID,
+)
+orchestrator = PitrOrchestratorService(
+    clone_service=clone_service,
+    restore_service=database_restore_service,
 )
 
 
-# another variant of the similar pitr, to-be-explored in follow-up tickets
-# source_database_table_service = DatabaseTableService(source_table_model, source_session)
-# destination_database_table_service = DatabaseTableService(source_table_model, destination_session)
-# databaseOrmService2 = DatabaseOrmService2()
-# databaseOrmService2.copies_table_data(source_database_table_service, destination_database_table_service)
+def run_restore(
+    questionnaire_name: str,
+    restore_timestamp_input: str,
+    request_id: str | None = None,
+) -> None:
+    correlation_id = request_id or str(uuid.uuid4())
+    started_at = time.monotonic()
+    restore_timestamp = parse_uk_local_timestamp(restore_timestamp_input)
+
+    clone_instance_name = build_clone_instance_name(
+        prefix=Settings.CLONE_NAME_PREFIX,
+        questionnaire_name=questionnaire_name,
+        timestamp=restore_timestamp,
+    )
+
+    restore_request = PitrRequest(
+        request_id=correlation_id,
+        questionnaire_name=questionnaire_name,
+        timestamp=restore_timestamp,
+        source_instance_name=Settings.RESTORE_SOURCE_INSTANCE_NAME,
+        destination_instance_name=Settings.DEST_INSTANCE_NAME,
+        clone_instance_name=clone_instance_name,
+        operation_timeout_seconds=Settings.CLONE_OPERATION_TIMEOUT_SECONDS,
+        operation_poll_seconds=Settings.CLONE_OPERATION_POLL_SECONDS,
+    )
+
+    LOGGER.info(
+        (
+            "Restore request parsed; request_id=%s "
+            "questionnaire=%s uk_local_timestamp=%s clone=%s"
+        ),
+        correlation_id,
+        questionnaire_name,
+        restore_timestamp_input,
+        clone_instance_name,
+    )
+
+    orchestrator.restore_questionnaire_from_point_in_time(restore_request)
+    LOGGER.info(
+        (
+            "Restore request finished; request_id=%s "
+            "questionnaire=%s duration_seconds=%.2f"
+        ),
+        correlation_id,
+        questionnaire_name,
+        time.monotonic() - started_at,
+    )
+
+
+def _json_error(
+    code: str,
+    message: str,
+    status: int,
+    details: str | None = None,
+    request_id: str | None = None,
+) -> tuple[flask.Response, int]:
+    error_body: dict[str, str] = {
+        "code": code,
+        "message": message,
+    }
+    if details is not None:
+        error_body["details"] = details
+    if request_id is not None:
+        error_body["request_id"] = request_id
+
+    body: dict[str, dict[str, str]] = {"error": error_body}
+
+    return flask.jsonify(body), status
+
+
+def restore_questionnaire(request: flask.Request) -> tuple[flask.Response | str, int]:
+    """Cloud Function HTTP entry point."""
+    request_id = str(uuid.uuid4())
+    data = request.get_json(silent=True) or {}
+    questionnaire_name = str(data.get("questionnaire_name", ""))
+    timestamp_str = str(data.get("timestamp", ""))
+    if not questionnaire_name or not timestamp_str:
+        LOGGER.error(
+            (
+                "Restore request rejected; request_id=%s reason=missing_parameters "
+                "questionnaire_name=%r timestamp=%r"
+            ),
+            request_id,
+            questionnaire_name,
+            timestamp_str,
+        )
+        return _json_error(
+            code="missing_parameters",
+            message="Missing required fields.",
+            details="Expected questionnaire_name and timestamp.",
+            status=400,
+            request_id=request_id,
+        )
+
+    LOGGER.info(
+        "Restore request accepted; request_id=%s questionnaire=%s timestamp=%s",
+        request_id,
+        questionnaire_name,
+        timestamp_str,
+    )
+
+    try:
+        run_restore(questionnaire_name, timestamp_str, request_id=request_id)
+    except ValueError:
+        LOGGER.warning(
+            (
+                "Restore request rejected; request_id=%s reason=invalid_timestamp "
+                "questionnaire=%s timestamp=%s"
+            ),
+            request_id,
+            questionnaire_name,
+            timestamp_str,
+        )
+        return _json_error(
+            code="invalid_timestamp",
+            message="Timestamp is invalid.",
+            details=(
+                "Use ISO-like format such as 'YYYY-MM-DD HH:MM:SS' or "
+                "'YYYY-MM-DDTHH:MM:SS'."
+            ),
+            status=400,
+            request_id=request_id,
+        )
+    except Exception:
+        LOGGER.exception(
+            "Restore execution failed; request_id=%s questionnaire=%s timestamp=%s",
+            request_id,
+            questionnaire_name,
+            timestamp_str,
+        )
+        return _json_error(
+            code="restore_failed",
+            message="Restore operation failed.",
+            details="See Cloud Function logs with the provided request_id.",
+            status=500,
+            request_id=request_id,
+        )
+
+    LOGGER.info(
+        "Restore request completed successfully; request_id=%s questionnaire=%s",
+        request_id,
+        questionnaire_name,
+    )
+    return "OK", 200

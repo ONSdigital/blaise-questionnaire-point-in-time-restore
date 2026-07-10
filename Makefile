@@ -1,37 +1,32 @@
-mkfile_dir := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+.PHONY: lint lint-fix typecheck deptry vulture test run
 
-.PHONY: show-help
-## This help screen
-show-help:
-	@echo "$$(tput bold)Available rules:$$(tput sgr0)";echo;sed -ne"/^## /{h;s/.*//;:d" -e"H;n;s/^## //;td" -e"s/:.*//;G;s/\\n## /---/;s/\\n/ /g;p;}" ${MAKEFILE_LIST}|LC_ALL='C' sort -f|awk -F --- -v n=$$(tput cols) -v i=29 -v a="$$(tput setaf 6)" -v z="$$(tput sgr0)" '{printf"%s%*s%s ",a,-i,$$1,z;m=split($$2,w," ");l=n-i;for(j=1;j<=m;j++){l-=length(w[j])+1;if(l<= 0){l=n-i-length(w[j])-1;printf"\n%*s ",-i," ";}printf"%s ",w[j];}printf"\n";}'
-
-.PHONY: format
-## Format python
-format:
-	@echo "Running Black..."
-	@poetry run black .
-	@echo "Running isort..."
-	@poetry run isort .
-
-.PHONY: lint
-## Run styling checks for python
 lint:
-	@echo "Checking Black formatting..."
-	@poetry run black --check .
-	@echo "Checking isort..."
-	@poetry run isort --check .
-	@echo "Running flake8..."
-	@poetry run flake8 .
-	@echo "Running mypy..."
-	@poetry run mypy --config-file ${mkfile_dir}/.mypy.ini .
+	poetry run ruff check .
 
-.PHONY: test
-## Run unit tests
+lint-fix:
+	poetry run ruff check --fix .
+	poetry run ruff format .
+
+typecheck:
+	poetry run pyright
+
+deptry:
+	poetry run deptry .
+
+vulture:
+	poetry run vulture .
+
 test:
-	@poetry run python -m pytest -vvv
+	poetry run pytest
 
-.PHONY: run
-## Run main.py
 run:
-	@echo "Starting data restore..."
-	@poetry run python main.py
+	@questionnaire="$(word 2,$(MAKECMDGOALS))"; \
+	timestamp="$$(printf "%s" "$(wordlist 3,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))")"; \
+	if [ -z "$$questionnaire" ] || [ -z "$$timestamp" ]; then \
+		echo "Usage: make run <questionnaire_name> <YYYY-MM-DD HH:MM:SS>"; \
+		exit 2; \
+	fi; \
+	bash scripts/run_restore.sh "$$questionnaire" "$$timestamp"
+
+%:
+	@:

@@ -1,137 +1,126 @@
-# Blaise Table Point-in-Time Restore
+# Blaise Questionnaire Point-in-Time Restore 🔄
 
-Provides functionality to perform a point-in-time restore for specific Blaise questionnaire data table. Full database restores should be done via the GCP console.
+This function restores questionnaire data for a specific point in time by creating a temporary Cloud SQL clone and copying data from that clone into the live database.
 
-## How it Works
+Full instance-level restore operations are still done through the GCP console.
 
-The service performs the following steps:
+## Current Execution Model
 
-1.  **Connects to Databases:** Establishes a connection to both the source (restored backup) and destination (live) Google Cloud SQL for MySQL instances using the Cloud SQL Python Connector.
-2.  **Reads Configuration:** Reads database connection details and the target table name from environment variables.
-3.  **Copies Data:** Copies the data from the specified table in the source database to the corresponding table in the destination database using SQLAlchemy.
+You run a wrapper script with two parameters:
+
+- `questionnaire_name`
+- `timestamp` (for example `2026-07-08 14:30:00`)
+
+The wrapper script then:
+
+1. Creates a temporary service account.
+2. Grants required IAM roles.
+3. Deploys a temporary HTTP Cloud Function.
+4. Invokes that function with your parameters.
+5. Cleans up the temporary Cloud Function and service account.
+
+Inside the Cloud Function, the Python application:
+
+1. Builds a point-in-time clone of the source Cloud SQL instance.
+2. Restores questionnaire data from the clone into the destination instance.
+3. Deletes the temporary Cloud SQL clone.
+
+## What Gets Restored
+
+The restore currently targets two tables per questionnaire:
+
+- `<QUESTIONNAIRE_NAME>_DML`
+- `<QUESTIONNAIRE_NAME>_FORM`
+
+The destination table is replaced with data from the clone (delete existing rows, then insert source rows).
 
 ## Prerequisites
 
--   Python 3.13+
--   [Poetry](https://python-poetry.org/) for dependency management
--   [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` CLI) installed and authenticated
+- Python 3.13+
+- [Poetry](https://python-poetry.org/) for dependency management
+- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` CLI) installed and authenticated
+- Permissions to create/delete service accounts, deploy Cloud Functions, manage Cloud SQL, and invoke Cloud Functions
 
-## Setup & Configuration
+## Setup
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd blaise-point-in-time-restore
-    ```
+1. Clone the repository and install dependencies:
 
-2.  **Install dependencies:**
-    ```bash
-    poetry install
-    ```
-
-3.  **Authenticate with Google Cloud:**
-    You need to authenticate your local environment to access Google Cloud resources.
-
-    ```bash
-    gcloud auth application-default login
-    gcloud config set project <GCP_PROJECT_ID>
-    ```
-
-4.  **Create a `.env` file:**
-    Create a `.env` file in the root of the project with your specific configuration.
-
-### Environment Variables
-
-| Variable | Description |
-| --- | --- |
-| `SOURCE_INSTANCE_NAME` | The connection name of the source Cloud SQL instance (the restored backup). |
-| `SOURCE_DB_NAME` | The name of the source database. |
-| `SOURCE_DB_DRIVER` | The Python MySQL client library to use (e.g., `pymysql`). |
-| `SOURCE_DB_URL` | The SQLAlchemy database URL prefix. |
-| `SOURCE_DB_USERNAME` | The username for the source database. |
-| `SOURCE_DB_PASSWORD` | The password for the source database user. |
-| `SOURCE_DB_IP_TYPE` | The IP type for the Cloud SQL connector (`PUBLIC` or `PRIVATE`). Requires VPC access for `PRIVATE`. |
-| `DEST_INSTANCE_NAME` | The connection name of the destination Cloud SQL instance (the live instance). |
-| `DEST_DB_NAME` | The name of the destination database. |
-| `DEST_DB_DRIVER` | The Python MySQL client library to use. |
-| `DEST_DB_URL` | The SQLAlchemy database URL prefix. |
-| `DEST_DB_USERNAME` | The username for the destination database. |
-| `DEST_DB_PASSWORD` | The password for the destination database user. |
-| `DEST_DB_IP_TYPE` | The IP type for the Cloud SQL connector (`PUBLIC` or `PRIVATE`). |
-| `TABLE_NAME` | The name of the questionnaire table to restore. |
-
-**Note:** To perform the restore, you may need to authorise your local IP address in the "Authorized Networks" section of your Cloud SQL instances if you are using a `PUBLIC` IP connection.
-
-Example `.env` file:
-
+```bash
+git clone https://github.com/ONSdigital/blaise-questionnaire-point-in-time-restore.git
+cd blaise-questionnaire-point-in-time-restore
+poetry install
 ```
-# Source Database (Restored Backup)
-SOURCE_INSTANCE_NAME="your-gcp-project:your-region:your-restored-instance-name"
-SOURCE_DB_NAME="blaise"
-SOURCE_DB_DRIVER="pymysql"
-SOURCE_DB_URL="mysql+pymysql://"
-SOURCE_DB_USERNAME="your-db-user"
-SOURCE_DB_PASSWORD="your-db-password"
-SOURCE_DB_IP_TYPE="PUBLIC" # or PRIVATE
 
-# Destination Database (Live)
-DEST_INSTANCE_NAME="your-gcp-project:your-region:your-live-instance-name"
-DEST_DB_NAME="blaise"
-DEST_DB_DRIVER="pymysql"
-DEST_DB_URL="mysql+pymysql://"
-DEST_DB_USERNAME="your-db-user"
-DEST_DB_PASSWORD="your-db-password"
-DEST_DB_IP_TYPE="PUBLIC" # or PRIVATE
+2. Authenticate with Google Cloud:
 
-# Table to Restore
-TABLE_NAME="LMS2509_KO1_Form"
+```bash
+gcloud auth application-default login
+gcloud auth login
+gcloud config set project <GCP_PROJECT_ID>
 ```
+
+## Configuration
+
+No runtime environment variables are required or supported for restore behavior.
+
+The function discovers everything from the authenticated project context:
+
+- Active project from ADC/gcloud auth context
+- Destination Cloud SQL instance from the project instances list
+- Destination database name from the instance database list
+- Destination DB password from Secret Manager secret `cloudsql_pw`
+- Source instance is the same as destination instance (clone from live)
 
 ## Usage
 
-Follow these steps to perform a point-in-time restore for a specific questionnaire.
-
-### 1. Find the Backup ID
-
-List the available backups for your SQL instance to find the ID of the backup you want to restore from.
+Run via Make:
 
 ```bash
-gcloud sql backups list --instance=YOUR_SQL_INSTANCE_NAME
+make run LMS2601_KX2 "2026-07-08 14:30:00"
 ```
 
-### 2. Create a Restored Instance
+### Request Parameters Sent to the Cloud Function
 
-Create a new Cloud SQL instance from the selected backup using the Google Cloud Console. Follow the official documentation: [Restoring a Cloud SQL instance](https://cloud.google.com/sql/docs/mysql/backup-recovery/restoring).
+The wrapper invokes the HTTP function with JSON:
 
-### 3. Run the Restore Script
-
-Once the new instance is running and you have configured your `.env` file, run the script to copy the data.
-
-```bash
-poetry run python main.py
-```
-Or using the Makefile:
-```bash
-make run
+```json
+{
+  "questionnaire_name": "LMS2601_KX2",
+  "timestamp": "2026-07-08 14:30:00"
+}
 ```
 
-The script will copy the data for the specified `TABLE_NAME` from the source to the destination instance.
+Timestamp input is parsed as UK local time (`Europe/London`) when no timezone is provided.
+
+## End-to-End Flow Details
+
+When you run `make run <questionnaire_name> <timestamp>`:
+
+1. A temporary service account is created.
+2. IAM roles are granted for Cloud SQL, Secret Manager, logging, and invocation.
+3. A temporary Cloud Function is deployed (`restore_questionnaire` entry point).
+4. The function is invoked with your `questionnaire_name` and `timestamp`.
+5. In function runtime:
+   - Validate source/destination instances are available.
+   - Create point-in-time clone.
+   - Copy `<QUESTIONNAIRE>_DML` from clone to destination.
+   - Copy `<QUESTIONNAIRE>_FORM` from clone to destination.
+   - Delete clone.
+6. Wrapper cleanup runs (even on failure):
+   - Delete temporary function.
+   - Remove temporary service account and role bindings.
+
+## Future Deployment Direction
+
+This temporary deployment model is intended as a bridge. The target model is to deploy this Cloud Function permanently in each project/environment so it can be invoked directly from GCP (for example via Cloud Console/Cloud Functions invocation) without creating a temporary function per run.
 
 ## Development
 
-This project includes a `Makefile` with commands for common development tasks.
+This project includes a `Makefile` with common commands:
 
--   **Format Code:**
-    ```bash
-    make format
-    ```
-
--   **Lint Code:**
-    ```bash
-    make lint
-    ```
-
--   **Run Tests:**
-    ```bash
-    make test
-    ```
+- Lint: `make lint`
+- Lint + format fixes: `make lint-fix`
+- Type check: `make typecheck`
+- Dependency check: `make deptry`
+- Dead code scan: `make vulture`
+- Tests: `make test`

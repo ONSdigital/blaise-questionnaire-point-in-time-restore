@@ -1,3 +1,6 @@
+import logging
+import time
+from datetime import UTC
 from typing import Any
 
 import requests
@@ -5,47 +8,267 @@ import requests
 from models.database_clone_model import DatabaseCloneModel
 from services.authorisation_service import AuthorisationService
 
+LOGGER = logging.getLogger(__name__)
+HTTP_NOT_FOUND = 404
+HTTP_BAD_REQUEST = 400
+
 
 class DatabaseCloneService:
     def __init__(
         self,
         authorisation_service: AuthorisationService,
-        clone_api_url: str,
-        delete_clone_api_url: str,
+        project_id: str,
+        sql_admin_api_url: str = "https://sqladmin.googleapis.com/sql/v1beta4",
     ):
         self._authorisation_service = authorisation_service
-        self._clone_api_url = clone_api_url
-        self._delete_clone_api_url = delete_clone_api_url
+        self._project_id = project_id
+        self._sql_admin_api_url = sql_admin_api_url.rstrip("/")
 
-    def create_clone(self, database_clone_model: DatabaseCloneModel) -> Any:
+    def create_clone(self, database_clone_model: DatabaseCloneModel) -> str:
+        clone_api_url = self.__get_instance_api_url(
+            database_clone_model.source_instance_name
+        )
         response = requests.post(
-            url=self._clone_api_url,
+            url=f"{clone_api_url}/clone",
             headers=self.__create_authorisation_headers(),
             json=self.__create_clone_request_body(database_clone_model),
         )
+        response.raise_for_status()
 
-        print(response.text)
+        response_body = response.json()
+        operation_name = response_body.get("name")
+        if not operation_name:
+            raise ValueError(
+                "Clone request succeeded but no operation name was returned"
+            )
 
-        return response
+        LOGGER.info(
+            "Clone requested; source=%s destination=%s point_in_time=%s operation=%s",
+            database_clone_model.source_instance_name,
+            database_clone_model.destination_instance_name,
+            database_clone_model.point_in_time.isoformat(),
+            operation_name,
+        )
 
-    def delete_clone(self):
-        response = requests.delete(url=self._delete_clone_api_url)
-        print(response.text)
+        return str(operation_name)
 
-    def __create_authorisation_headers(self) -> Any:
+    def delete_clone(self, instance_name: str) -> str:
+        response = requests.delete(
+            url=self.__get_instance_api_url(instance_name),
+            headers=self.__create_authorisation_headers(),
+        )
+
+        if (
+            response.status_code == HTTP_BAD_REQUEST
+            and "protected" in response.text.lower()
+        ):
+            LOGGER.info(
+                "Delete blocked by deletion protection; instance=%s", instance_name
+            )
+            self.__disable_deletion_protection(instance_name)
+            response = requests.delete(
+                url=self.__get_instance_api_url(instance_name),
+                headers=self.__create_authorisation_headers(),
+            )
+
+        response.raise_for_status()
+
+        response_body = response.json()
+        operation_name = response_body.get("name")
+        if not operation_name:
+            raise ValueError(
+                "Delete clone request succeeded but no operation name was returned"
+            )
+
+        LOGGER.info(
+            "Clone delete requested; instance=%s operation=%s",
+            instance_name,
+            operation_name,
+        )
+
+        return str(operation_name)
+
+    def get_instance(self, instance_name: str) -> dict[str, Any]:
+        response = requests.get(
+            url=self.__get_instance_api_url(instance_name),
+            headers=self.__create_authorisation_headers(),
+        )
+        response.raise_for_status()
+
+        instance = response.json()
+        LOGGER.info("Cloud SQL instance located; instance=%s", instance_name)
+
+        return dict(instance)
+
+    def instance_exists(self, instance_name: str) -> bool:
+        response = requests.get(
+            url=self.__get_instance_api_url(instance_name),
+            headers=self.__create_authorisation_headers(),
+        )
+        if response.status_code == HTTP_NOT_FOUND:
+            LOGGER.info("Cloud SQL instance not found; instance=%s", instance_name)
+            return False
+
+        response.raise_for_status()
+        LOGGER.info("Cloud SQL instance exists; instance=%s", instance_name)
+        return True
+
+    def wait_for_operation(
+        self,
+        operation_name: str,
+        timeout_seconds: int,
+        poll_interval_seconds: int = 5,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds
+        started_at = time.monotonic()
+        last_status = "UNKNOWN"
+
+        LOGGER.info(
+            (
+                "Waiting for Cloud SQL operation; operation=%s timeout_seconds=%s "
+                "poll_interval_seconds=%s"
+            ),
+            operation_name,
+            timeout_seconds,
+            poll_interval_seconds,
+        )
+
+        while True:
+            response = requests.get(
+                url=self.__get_operation_api_url(operation_name),
+                headers=self.__create_authorisation_headers(),
+            )
+            response.raise_for_status()
+            operation = dict(response.json())
+            status = str(operation.get("status", "UNKNOWN"))
+
+            if status != last_status:
+                LOGGER.info(
+                    (
+                        "Cloud SQL operation status changed; operation=%s "
+                        "status=%s elapsed_seconds=%.2f"
+                    ),
+                    operation_name,
+                    status,
+                    time.monotonic() - started_at,
+                )
+                last_status = status
+
+            if status == "DONE":
+                operation_error = operation.get("error")
+                if operation_error:
+                    LOGGER.error(
+                        "Cloud SQL operation failed; operation=%s error=%s",
+                        operation_name,
+                        operation_error,
+                    )
+                    raise RuntimeError(f"Cloud SQL operation failed: {operation_error}")
+
+                LOGGER.info(
+                    "Cloud SQL operation completed; operation=%s elapsed_seconds=%.2f",
+                    operation_name,
+                    time.monotonic() - started_at,
+                )
+                return operation
+
+            if time.monotonic() >= deadline:
+                LOGGER.error(
+                    (
+                        "Cloud SQL operation timed out; operation=%s "
+                        "last_status=%s timeout_seconds=%s"
+                    ),
+                    operation_name,
+                    status,
+                    timeout_seconds,
+                )
+                raise TimeoutError(
+                    f"Timed out waiting for Cloud SQL operation: {operation_name}"
+                )
+
+            time.sleep(poll_interval_seconds)
+
+    def __disable_deletion_protection(self, instance_name: str) -> None:
+        """Disable deletion protection, starting a STOPPED instance if required."""
+        patch_body: dict[str, Any] = {"settings": {"deletionProtectionEnabled": False}}
+
+        response = requests.patch(
+            url=self.__get_instance_api_url(instance_name),
+            headers=self.__create_authorisation_headers(),
+            json=patch_body,
+        )
+
+        if (
+            response.status_code == HTTP_BAD_REQUEST
+            and "stopped" in response.text.lower()
+        ):
+            LOGGER.info(
+                (
+                    "Instance is stopped while disabling deletion protection; "
+                    "requesting start and patch; instance=%s"
+                ),
+                instance_name,
+            )
+            patch_body["settings"] = {
+                "deletionProtectionEnabled": False,
+                "activationPolicy": "ALWAYS",
+            }
+            response = requests.patch(
+                url=self.__get_instance_api_url(instance_name),
+                headers=self.__create_authorisation_headers(),
+                json=patch_body,
+            )
+
+        response.raise_for_status()
+        patch_operation = response.json().get("name")
+        if patch_operation:
+            LOGGER.info(
+                "Deletion protection disable requested; instance=%s operation=%s",
+                instance_name,
+                patch_operation,
+            )
+            self.wait_for_operation(patch_operation, timeout_seconds=300)
+
+    def __create_authorisation_headers(self) -> dict[str, str]:
         token = self._authorisation_service.get_credentials_token()
 
         return {
-            "Authorization": "Bearer {}".format(token),
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
+    def __get_instance_api_url(self, instance_name: str) -> str:
+        normalized_instance_name = self.__normalize_instance_name(instance_name)
+        return (
+            f"{self._sql_admin_api_url}/projects/{self._project_id}/instances/"
+            f"{normalized_instance_name}"
+        )
+
+    def __get_operation_api_url(self, operation_name: str) -> str:
+        return (
+            f"{self._sql_admin_api_url}/projects/{self._project_id}/operations/"
+            f"{operation_name}"
+        )
+
     @staticmethod
-    def __create_clone_request_body(database_clone_model: DatabaseCloneModel) -> Any:
+    def __normalize_instance_name(instance_identifier: str) -> str:
+        return instance_identifier.rsplit(":", maxsplit=1)[-1]
+
+    @staticmethod
+    def __create_clone_request_body(
+        database_clone_model: DatabaseCloneModel,
+    ) -> dict[str, Any]:
+        point_in_time = database_clone_model.point_in_time
+        if point_in_time.tzinfo is None:
+            point_in_time = point_in_time.replace(tzinfo=UTC)
+
+        point_in_time_utc = point_in_time.astimezone(UTC)
+
         return {
             "cloneContext": {
-                "kind": database_clone_model.source_instance_name,
-                "destinationInstanceName": database_clone_model.destination_instance_name,
-                "pointInTime": database_clone_model.point_in_time,
+                "kind": "sql#cloneContext",
+                "destinationInstanceName": (
+                    database_clone_model.destination_instance_name
+                ),
+                "pointInTime": point_in_time_utc.isoformat().replace("+00:00", "Z"),
             }
         }

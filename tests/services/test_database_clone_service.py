@@ -1,0 +1,332 @@
+from datetime import UTC, datetime
+from typing import Any, cast
+from unittest.mock import Mock, patch
+
+import pytest
+
+from models.database_clone_model import DatabaseCloneModel
+from services.database_clone_service import DatabaseCloneService
+
+
+@pytest.fixture
+def authorisation_service() -> Mock:
+    service = Mock()
+    service.get_credentials_token.return_value = "token-123"
+    return service
+
+
+@pytest.fixture
+def clone_service(authorisation_service: Mock) -> DatabaseCloneService:
+    return DatabaseCloneService(
+        authorisation_service=authorisation_service, project_id="proj"
+    )
+
+
+def test_create_clone_returns_operation_name(
+    clone_service: DatabaseCloneService,
+) -> None:
+    clone_model = DatabaseCloneModel()
+    clone_model.source_instance_name = "proj:region:source"
+    clone_model.destination_instance_name = "clone-target"
+    clone_model.point_in_time = datetime(2026, 7, 8, 14, 30, tzinfo=UTC)
+
+    response = Mock()
+    response.json.return_value = {"name": "op-create"}
+    response.raise_for_status.return_value = None
+
+    with patch(
+        "services.database_clone_service.requests.post", return_value=response
+    ) as mock_post:
+        operation = clone_service.create_clone(clone_model)
+
+    assert operation == "op-create"
+    mock_post.assert_called_once()
+
+
+def test_create_clone_raises_when_no_operation_name(
+    clone_service: DatabaseCloneService,
+) -> None:
+    clone_model = DatabaseCloneModel()
+    clone_model.source_instance_name = "source"
+    clone_model.destination_instance_name = "dest"
+    clone_model.point_in_time = datetime(2026, 7, 8, 14, 30, tzinfo=UTC)
+
+    response = Mock()
+    response.json.return_value = {}
+    response.raise_for_status.return_value = None
+
+    with (
+        patch("services.database_clone_service.requests.post", return_value=response),
+        pytest.raises(ValueError, match="no operation name"),
+    ):
+        clone_service.create_clone(clone_model)
+
+
+def test_delete_clone_returns_operation_name(
+    clone_service: DatabaseCloneService,
+) -> None:
+    response = Mock()
+    response.status_code = 200
+    response.text = ""
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"name": "op-delete"}
+
+    with patch(
+        "services.database_clone_service.requests.delete", return_value=response
+    ):
+        operation = clone_service.delete_clone("clone-instance")
+
+    assert operation == "op-delete"
+
+
+def test_delete_clone_handles_deletion_protection(
+    clone_service: DatabaseCloneService,
+) -> None:
+    protected_delete = Mock()
+    protected_delete.status_code = 400
+    protected_delete.text = "Instance is protected"
+    protected_delete.raise_for_status.return_value = None
+
+    successful_delete = Mock()
+    successful_delete.status_code = 200
+    successful_delete.text = ""
+    successful_delete.raise_for_status.return_value = None
+    successful_delete.json.return_value = {"name": "op-delete"}
+
+    with (
+        patch(
+            "services.database_clone_service.requests.delete",
+            side_effect=[protected_delete, successful_delete],
+        ) as mock_delete,
+        patch(
+            "services.database_clone_service.requests.patch",
+        ) as mock_patch,
+        patch.object(clone_service, "wait_for_operation") as mock_wait,
+    ):
+        patch_response = Mock()
+        patch_response.status_code = 200
+        patch_response.text = ""
+        patch_response.raise_for_status.return_value = None
+        patch_response.json.return_value = {"name": "op-disable-protection"}
+        mock_patch.return_value = patch_response
+
+        operation = clone_service.delete_clone("clone-instance")
+
+    assert operation == "op-delete"
+    expected_calls = 2
+    assert mock_delete.call_count == expected_calls
+    mock_wait.assert_called_once_with("op-disable-protection", timeout_seconds=300)
+
+
+def test_delete_clone_retries_patch_when_instance_stopped(
+    clone_service: DatabaseCloneService,
+) -> None:
+    protected_delete = Mock()
+    protected_delete.status_code = 400
+    protected_delete.text = "protected"
+    protected_delete.raise_for_status.return_value = None
+
+    successful_delete = Mock()
+    successful_delete.status_code = 200
+    successful_delete.text = ""
+    successful_delete.raise_for_status.return_value = None
+    successful_delete.json.return_value = {"name": "op-delete"}
+
+    first_patch = Mock()
+    first_patch.status_code = 400
+    first_patch.text = "instance is stopped"
+    first_patch.raise_for_status.return_value = None
+
+    second_patch = Mock()
+    second_patch.status_code = 200
+    second_patch.text = ""
+    second_patch.raise_for_status.return_value = None
+    second_patch.json.return_value = {"name": "op-patch"}
+
+    with (
+        patch(
+            "services.database_clone_service.requests.delete",
+            side_effect=[protected_delete, successful_delete],
+        ),
+        patch(
+            "services.database_clone_service.requests.patch",
+            side_effect=[first_patch, second_patch],
+        ) as mock_patch,
+        patch.object(clone_service, "wait_for_operation") as mock_wait,
+    ):
+        clone_service.delete_clone("clone-instance")
+
+    expected_calls = 2
+    assert mock_patch.call_count == expected_calls
+    mock_wait.assert_called_once_with("op-patch", timeout_seconds=300)
+
+
+def test_delete_clone_raises_when_operation_name_missing(
+    clone_service: DatabaseCloneService,
+) -> None:
+    response = Mock()
+    response.status_code = 200
+    response.text = ""
+    response.raise_for_status.return_value = None
+    response.json.return_value = {}
+
+    with (
+        patch("services.database_clone_service.requests.delete", return_value=response),
+        pytest.raises(ValueError, match="no operation name"),
+    ):
+        clone_service.delete_clone("clone-instance")
+
+
+def test_get_instance_returns_payload(clone_service: DatabaseCloneService) -> None:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"name": "i1", "connectionName": "proj:reg:i1"}
+
+    with patch("services.database_clone_service.requests.get", return_value=response):
+        instance = clone_service.get_instance("i1")
+
+    assert instance["name"] == "i1"
+
+
+def test_instance_exists_returns_false_on_404(
+    clone_service: DatabaseCloneService,
+) -> None:
+    response = Mock()
+    response.status_code = 404
+
+    with patch("services.database_clone_service.requests.get", return_value=response):
+        exists = clone_service.instance_exists("missing")
+
+    assert exists is False
+
+
+def test_instance_exists_returns_true_for_existing_instance(
+    clone_service: DatabaseCloneService,
+) -> None:
+    response = Mock()
+    response.status_code = 200
+    response.raise_for_status.return_value = None
+
+    with patch("services.database_clone_service.requests.get", return_value=response):
+        exists = clone_service.instance_exists("exists")
+
+    assert exists is True
+
+
+def test_wait_for_operation_returns_when_done(
+    clone_service: DatabaseCloneService,
+) -> None:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"status": "DONE", "name": "op1"}
+
+    with patch("services.database_clone_service.requests.get", return_value=response):
+        operation = clone_service.wait_for_operation("op1", timeout_seconds=30)
+
+    assert operation["status"] == "DONE"
+
+
+def test_wait_for_operation_raises_for_operation_error(
+    clone_service: DatabaseCloneService,
+) -> None:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"status": "DONE", "error": {"message": "boom"}}
+
+    with (
+        patch("services.database_clone_service.requests.get", return_value=response),
+        pytest.raises(RuntimeError, match="operation failed"),
+    ):
+        clone_service.wait_for_operation("op1", timeout_seconds=30)
+
+
+def test_wait_for_operation_times_out(clone_service: DatabaseCloneService) -> None:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"status": "RUNNING"}
+
+    with (
+        patch("services.database_clone_service.requests.get", return_value=response),
+        patch(
+            "services.database_clone_service.time.monotonic",
+            side_effect=[0.0, 0.0, 10.0, 10.0],
+        ),
+        patch("services.database_clone_service.time.sleep") as mock_sleep,
+        pytest.raises(TimeoutError, match="Timed out"),
+    ):
+        clone_service.wait_for_operation(
+            "op1", timeout_seconds=5, poll_interval_seconds=1
+        )
+
+    mock_sleep.assert_not_called()
+
+
+def test_wait_for_operation_polls_until_done(
+    clone_service: DatabaseCloneService,
+) -> None:
+    running_response = Mock()
+    running_response.raise_for_status.return_value = None
+    running_response.json.return_value = {"status": "RUNNING"}
+
+    done_response = Mock()
+    done_response.raise_for_status.return_value = None
+    done_response.json.return_value = {"status": "DONE", "name": "op1"}
+
+    with (
+        patch(
+            "services.database_clone_service.requests.get",
+            side_effect=[running_response, done_response],
+        ),
+        patch(
+            "services.database_clone_service.time.monotonic",
+            side_effect=[0.0, 0.0, 0.5, 1.0, 1.5, 2.0],
+        ),
+        patch("services.database_clone_service.time.sleep") as mock_sleep,
+    ):
+        operation = clone_service.wait_for_operation(
+            "op1", timeout_seconds=10, poll_interval_seconds=2
+        )
+
+    assert operation["status"] == "DONE"
+    mock_sleep.assert_called_once_with(2)
+
+
+def test_create_clone_request_body_normalizes_to_utc_z_suffix() -> None:
+    clone_model = DatabaseCloneModel()
+    clone_model.source_instance_name = "source"
+    clone_model.destination_instance_name = "dest"
+    clone_model.point_in_time = datetime(2026, 7, 8, 14, 30, 0)
+
+    body = cast(
+        Any, DatabaseCloneService
+    )._DatabaseCloneService__create_clone_request_body(clone_model)
+
+    assert body["cloneContext"]["destinationInstanceName"] == "dest"
+    assert body["cloneContext"]["pointInTime"].endswith("Z")
+
+
+def test_instance_api_url_normalizes_connection_name(
+    clone_service: DatabaseCloneService,
+) -> None:
+    url = cast(Any, clone_service)._DatabaseCloneService__get_instance_api_url(
+        "proj:region:instance1"
+    )
+
+    assert url.endswith("/projects/proj/instances/instance1")
+
+
+def test_operation_api_url_uses_project(clone_service: DatabaseCloneService) -> None:
+    url = cast(Any, clone_service)._DatabaseCloneService__get_operation_api_url("op-1")
+
+    assert url.endswith("/projects/proj/operations/op-1")
+
+
+def test_headers_include_bearer_token(clone_service: DatabaseCloneService) -> None:
+    headers = cast(
+        Any, clone_service
+    )._DatabaseCloneService__create_authorisation_headers()
+
+    assert headers == {
+        "Authorization": "Bearer token-123",
+        "Content-Type": "application/json",
+    }
