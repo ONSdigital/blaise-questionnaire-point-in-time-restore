@@ -4,7 +4,6 @@ from unittest.mock import ANY, MagicMock, call, patch
 
 import pytest
 import sqlalchemy
-from google.cloud.sql.connector import Connector
 from sqlalchemy import Table
 from sqlalchemy.orm import Session
 
@@ -36,10 +35,10 @@ class TestCopyFunctionality:
 
     @patch("services.database_service.Session", autospec=True)
     @patch.object(sqlalchemy, "create_engine")
-    @patch.object(Connector, "connect")
+    @patch("services.database_service.Connector")
     def test_copy_database_table_uses_the_connection_model_to_connect_to_the_database(
         self,
-        mock_connector,
+        mock_connector_class,
         _mock_engine,
         _mock_session_class,
         mock_creds,
@@ -64,7 +63,8 @@ class TestCopyFunctionality:
         creator_destination()
 
         # assert
-        mock_connector.assert_has_calls(
+        mock_connector = mock_connector_class.return_value
+        mock_connector.connect.assert_has_calls(
             [
                 call(
                     instance_connection_string=source_instance_name,
@@ -86,10 +86,10 @@ class TestCopyFunctionality:
 
     @patch("services.database_service.Session", autospec=True)
     @patch.object(sqlalchemy, "create_engine")
-    @patch.object(Connector, "connect")
+    @patch("services.database_service.Connector")
     def test_copy_database_table_uses_database_url_to_create_engine(
         self,
-        mock_connector,
+        mock_connector_class,
         mock_engine,
         _mock_session_class,
         mock_creds,
@@ -103,7 +103,8 @@ class TestCopyFunctionality:
 
         mock_source_database_connection = MagicMock()
         mock_destination_database_connection = MagicMock()
-        mock_connector.configure_mock(
+        mock_connector = mock_connector_class.return_value
+        mock_connector.connect.configure_mock(
             side_effect=[
                 mock_source_database_connection,
                 mock_destination_database_connection,
@@ -141,10 +142,10 @@ class TestCopyFunctionality:
     @patch.object(Table, "select")
     @patch.object(Session, "execute")
     @patch.object(sqlalchemy, "create_engine")
-    @patch.object(Connector, "connect")
+    @patch("services.database_service.Connector")
     def test_copy_database_table_selects_the_correct_table_data_to_copy_from(
         self,
-        _mock_connector,
+        _mock_connector_class,
         _mock_engine,
         mock_session_execute,
         mock_table_select,
