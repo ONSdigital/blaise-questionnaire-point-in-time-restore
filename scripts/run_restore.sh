@@ -29,6 +29,7 @@ fi
 SA_NAME="pitr-$(date +%s)"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 FUNCTION_NAME="${SA_NAME}"
+BACKUP_BUCKET="${PROJECT}-backups"
 
 cleanup() {
     echo "Deleting Cloud Function ${FUNCTION_NAME} ..."
@@ -45,6 +46,10 @@ cleanup() {
     gcloud projects remove-iam-policy-binding "${PROJECT}" \
         --member="serviceAccount:${SA_EMAIL}" \
         --role="roles/logging.logWriter" --quiet --format=none 2>/dev/null || true
+    gcloud storage buckets remove-iam-policy-binding "gs://${BACKUP_BUCKET}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="roles/storage.admin" \
+        --quiet 2>/dev/null || true
     gcloud iam service-accounts delete "${SA_EMAIL}" --quiet 2>/dev/null || true
 }
 
@@ -82,8 +87,6 @@ gcloud projects add-iam-policy-binding "${PROJECT}" \
     --member="serviceAccount:${SA_EMAIL}" \
     --role="roles/logging.logWriter" --quiet --format=none
 
-# serviceAccountTokenCreator: allows gcloud impersonation check below
-# serviceAccountUser (actAs): required to deploy a Cloud Function with this SA
 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
     --member="user:${USER_EMAIL}" \
     --role="roles/iam.serviceAccountTokenCreator" --format=none
@@ -91,6 +94,54 @@ gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
     --member="user:${USER_EMAIL}" \
     --role="roles/iam.serviceAccountUser" --format=none
+
+echo "Granting bucket permissions for Cloud SQL export/import ..."
+if ! gcloud storage buckets describe "gs://${BACKUP_BUCKET}" >/dev/null 2>&1; then
+    echo "Error: Backup bucket gs://${BACKUP_BUCKET} not found." >&2
+    exit 1
+fi
+
+gcloud storage buckets add-iam-policy-binding "gs://${BACKUP_BUCKET}" \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/storage.admin" \
+    --quiet
+
+mapfile -t CLOUD_SQL_INSTANCE_SERVICE_ACCOUNTS < <(
+    gcloud sql instances list \
+        --project="${PROJECT}" \
+        --format='value(serviceAccountEmailAddress)' \
+    | awk 'NF' \
+    | sort -u
+)
+
+if [[ "${#CLOUD_SQL_INSTANCE_SERVICE_ACCOUNTS[@]}" -eq 0 ]]; then
+    echo "Error: No Cloud SQL instance service accounts found in project ${PROJECT}." >&2
+    exit 1
+fi
+
+for cloud_sql_service_account in "${CLOUD_SQL_INSTANCE_SERVICE_ACCOUNTS[@]}"; do
+    echo "  Granting bucket access to ${cloud_sql_service_account} ..."
+    gcloud storage buckets add-iam-policy-binding "gs://${BACKUP_BUCKET}" \
+        --member="serviceAccount:${cloud_sql_service_account}" \
+        --role="roles/storage.objectAdmin" \
+        --quiet
+done
+
+echo "Waiting for bucket IAM to propagate for ${SA_EMAIL} ..."
+for i in $(seq 1 24); do
+    if CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT="${SA_EMAIL}" \
+        gcloud storage buckets get-iam-policy "gs://${BACKUP_BUCKET}" \
+        >/dev/null 2>&1; then
+        echo "  Bucket IAM ready after $((i * 5 - 5))s"
+        break
+    fi
+    if [[ "${i}" -eq 24 ]]; then
+        echo "Error: Bucket IAM propagation timed out after 120s" >&2
+        exit 1
+    fi
+    echo "  Attempt ${i}/24, retrying in 5s ..."
+    sleep 5
+done
 
 echo "Waiting for IAM to propagate ..."
 for i in $(seq 1 24); do
@@ -108,7 +159,6 @@ for i in $(seq 1 24); do
     sleep 5
 done
 
-# Discover VPC Access Connector (required for Cloud SQL private IP access)
 echo "Discovering VPC connector in ${REGION} ..."
 VPC_CONNECTOR=$(gcloud compute networks vpc-access connectors list \
     --region="${REGION}" \
@@ -123,7 +173,6 @@ if [[ -z "${VPC_CONNECTOR}" ]]; then
 fi
 echo "Using VPC connector: ${VPC_CONNECTOR}"
 
-# Generate requirements.txt — Cloud Functions build needs this (pyproject.toml not consumed)
 echo "Exporting requirements.txt ..."
 python - <<'PY'
 from pathlib import Path
@@ -163,7 +212,6 @@ gcloud functions deploy "${FUNCTION_NAME}" \
 
 rm -f requirements.txt
 
-# Obtain a function URL and a token for invocation.
 FUNCTION_URL=$(gcloud functions describe "${FUNCTION_NAME}" \
     --region="${REGION}" \
     --gen2 \
@@ -184,8 +232,6 @@ gcloud run services add-iam-policy-binding "${FUNCTION_NAME}" \
     --role="roles/run.invoker" \
     --quiet --format=none
 
-# For user accounts, --audiences often fails. Use SA impersonation first, then
-# fall back to an OAuth access token from the active account.
 if TOKEN=$(gcloud auth print-identity-token \
     --impersonate-service-account="${SA_EMAIL}" \
     "--audiences=${FUNCTION_URL}" 2>/dev/null); then
@@ -195,8 +241,9 @@ else
     TOKEN=$(gcloud auth print-access-token)
 fi
 
-echo "Invoking restore: questionnaire=${QUESTIONNAIRE} timestamp=${TIMESTAMP} ..."
+echo "Invoking PITR: questionnaire=${QUESTIONNAIRE} timestamp=${TIMESTAMP} ..."
 RESPONSE_FILE=$(mktemp)
+RESPONSE_BODY=""
 AUTH_READY=false
 for i in $(seq 1 24); do
     AUTH_CODE=$(curl -sS --max-time 10 \
@@ -228,7 +275,7 @@ if [[ "${AUTH_READY}" != true ]]; then
     exit 1
 fi
 
-echo "Auth ready; sending restore request..."
+echo "Auth ready; sending PITR request..."
 HTTP_CODE=$(curl -sS --max-time 3600 \
     -X POST \
     -H "Authorization: Bearer ${TOKEN}" \
@@ -236,8 +283,10 @@ HTTP_CODE=$(curl -sS --max-time 3600 \
     -d "{\"questionnaire_name\":\"${QUESTIONNAIRE}\",\"timestamp\":\"${TIMESTAMP}\"}" \
     -w "%{http_code}" \
     -o "${RESPONSE_FILE}" \
-    "${FUNCTION_URL}")
-RESPONSE_BODY=$(cat "${RESPONSE_FILE}")
+    "${FUNCTION_URL}" || true)
+if [[ -f "${RESPONSE_FILE}" ]]; then
+    RESPONSE_BODY=$(cat "${RESPONSE_FILE}")
+fi
 rm -f "${RESPONSE_FILE}"
 
 echo "${RESPONSE_BODY}"
@@ -246,4 +295,4 @@ if [[ "${HTTP_CODE}" != "200" ]]; then
     exit 1
 fi
 
-echo "Restore completed successfully."
+echo "PITR completed successfully."

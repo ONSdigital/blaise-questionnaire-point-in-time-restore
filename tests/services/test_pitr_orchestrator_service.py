@@ -70,7 +70,7 @@ def test_restore_questionnaire_from_point_in_time_happy_path(
             call("delete-op", timeout_seconds=120, poll_interval_seconds=2),
         ]
     )
-    restore_service.restore_questionnaire_dml_data.assert_called_once_with(
+    restore_service.restore_questionnaire_tables.assert_called_once_with(
         "LMS2601_KX2",
         source_instance_name="proj:reg:clone-conn",
         destination_instance_name="proj:reg:dest",
@@ -129,7 +129,7 @@ def test_restore_failure_is_reraised_even_if_clone_cleanup_also_fails(
     restore_service: Mock,
     pitr_request: PitrRequest,
 ) -> None:
-    restore_service.restore_questionnaire_dml_data.side_effect = RuntimeError(
+    restore_service.restore_questionnaire_tables.side_effect = RuntimeError(
         "restore failed"
     )
     clone_service.delete_clone.side_effect = RuntimeError("cleanup failed")

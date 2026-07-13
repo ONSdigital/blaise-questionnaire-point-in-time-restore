@@ -1,181 +1,97 @@
-from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import ANY, MagicMock, call, patch
+from unittest.mock import Mock, patch
 
 import pytest
-import sqlalchemy
-from sqlalchemy import Table
-from sqlalchemy.orm import Session
 
-from models.database_connection_model import DatabaseConnectionModel
 from services.database_service import DatabaseService
 
 
-class TestCopyFunctionality:
-    @pytest.fixture()
-    def connection_model(self):
-        return DatabaseConnectionModel(
-            instance_name="gcp-project:europe-west2:bens-clone2",
-            database_name="database",
-            database_username="blaise_user",
-            database_password="password_12345",
-            database_driver="pymsql",
-            database_url="mysql+pymysql://",
-        )
+@pytest.fixture
+def auth_service() -> Mock:
+    service = Mock()
+    service.get_credentials_token.return_value = "token-123"
+    return service
 
-    @pytest.fixture()
-    def service_under_test(
-        self, connection_model: DatabaseConnectionModel
-    ) -> DatabaseService:
-        return DatabaseService(connection_model=connection_model)
 
-    @pytest.fixture
-    def mock_creds(self):
-        return SimpleNamespace(universe_domain="googleapis.com")
+@pytest.fixture
+def service_under_test(auth_service: Mock) -> DatabaseService:
+    return DatabaseService(
+        authorisation_service=auth_service,
+        project_id="project-1",
+        database_name="blaise",
+        export_bucket_name="ons-blaise-v2-dev-backups",
+        export_prefix="questionnaire-pitr",
+        operation_timeout_seconds=120,
+        operation_poll_seconds=2,
+        http_connect_timeout_seconds=3.0,
+        http_read_timeout_seconds=45.0,
+    )
 
-    @patch("services.database_service.Session", autospec=True)
-    @patch.object(sqlalchemy, "create_engine")
-    @patch("services.database_service.Connector")
-    def test_copy_database_table_uses_the_connection_model_to_connect_to_the_database(
-        self,
-        mock_connector_class,
-        _mock_engine,
-        _mock_session_class,
-        mock_creds,
-        service_under_test,
-        connection_model,
-    ):
 
-        # arrange
-        table_name = "LMS2301_DD1_FORM"
-        source_instance_name = "b4team:europe-west2:blaise-dev-test-clone"
-        destination_instance_name = "blaise-dev-test"
+def test_headers_include_bearer_token(service_under_test: DatabaseService) -> None:
+    headers = cast(
+        Any, service_under_test
+    )._DatabaseService__create_authorisation_headers()
 
-        # act
-        with patch("google.auth.default", return_value=(mock_creds, "gcp-project")):
-            service_under_test.copy_table_data(
-                table_name, source_instance_name, destination_instance_name
-            )
+    assert headers == {
+        "Authorization": "Bearer token-123",
+        "Content-Type": "application/json",
+    }
 
-        creator_source = _mock_engine.call_args_list[0].kwargs["creator"]
-        creator_destination = _mock_engine.call_args_list[1].kwargs["creator"]
-        creator_source()
-        creator_destination()
 
-        # assert
-        mock_connector = mock_connector_class.return_value
-        mock_connector.connect.assert_has_calls(
-            [
-                call(
-                    instance_connection_string=source_instance_name,
-                    driver=connection_model.database_driver,
-                    user=connection_model.database_username,
-                    password=connection_model.database_password,
-                    db=connection_model.database_name,
-                ),
-                call(
-                    instance_connection_string=destination_instance_name,
-                    driver=connection_model.database_driver,
-                    user=connection_model.database_username,
-                    password=connection_model.database_password,
-                    db=connection_model.database_name,
-                ),
-            ],
-            any_order=True,
-        )
+def test_instance_api_url_normalizes_connection_name(
+    service_under_test: DatabaseService,
+) -> None:
+    url = cast(Any, service_under_test)._DatabaseService__get_instance_api_url(
+        "project-1:region:instance-1"
+    )
 
-    @patch("services.database_service.Session", autospec=True)
-    @patch.object(sqlalchemy, "create_engine")
-    @patch("services.database_service.Connector")
-    def test_copy_database_table_uses_database_url_to_create_engine(
-        self,
-        mock_connector_class,
-        mock_engine,
-        _mock_session_class,
-        mock_creds,
-        service_under_test,
-        connection_model,
-    ):
-        # arrange
-        table_name = "LMS2301_DD1_FORM"
-        source_instance_name = "b4team:europe-west2:blaise-dev-test-clone"
-        destination_instance_name = "blaise-dev-test"
+    assert url.endswith("/projects/project-1/instances/instance-1")
 
-        mock_source_database_connection = MagicMock()
-        mock_destination_database_connection = MagicMock()
-        mock_connector = mock_connector_class.return_value
-        mock_connector.connect.configure_mock(
+
+def test_copy_table_data_uses_configured_http_timeout(
+    service_under_test: DatabaseService,
+) -> None:
+    with (
+        patch(
+            "services.database_service.requests.post",
             side_effect=[
-                mock_source_database_connection,
-                mock_destination_database_connection,
-            ]
-        )
-
-        # act
-        with patch("google.auth.default", return_value=(mock_creds, "gcp-project")):
-            service_under_test.copy_table_data(
-                table_name, source_instance_name, destination_instance_name
-            )
-
-        # assert
-        mock_engine.assert_has_calls(
-            [
-                call(
-                    url=connection_model.database_url,
-                    creator=ANY,
-                    pool_pre_ping=True,
-                ),
-                call(
-                    url=connection_model.database_url,
-                    creator=ANY,
-                    pool_pre_ping=True,
-                ),
-            ]
-        )
-
-        creator_source = mock_engine.call_args_list[0].kwargs["creator"]
-        creator_destination = mock_engine.call_args_list[1].kwargs["creator"]
-        assert creator_source() is mock_source_database_connection
-        assert creator_destination() is mock_destination_database_connection
-
-    @patch.object(Table, "delete")
-    @patch.object(Table, "select")
-    @patch.object(Session, "execute")
-    @patch.object(sqlalchemy, "create_engine")
-    @patch("services.database_service.Connector")
-    def test_copy_database_table_selects_the_correct_table_data_to_copy_from(
-        self,
-        _mock_connector_class,
-        _mock_engine,
-        mock_session_execute,
-        mock_table_select,
-        mock_table_delete,
-        mock_creds,
-        service_under_test,
+                _operation_response("export-op"),
+                _operation_response("import-op"),
+            ],
+        ) as mock_post,
+        patch("services.database_service.requests.get", return_value=_done_response()),
     ):
-        # arrange
-        table_name = "LMS2301_DD1_FORM"
-        source_instance_name = "b4team:europe-west2:blaise-dev-test-clone"
-        destination_instance_name = "blaise-dev-test"
+        service_under_test.copy_table_data(
+            "TABLE_DML", "project-1:region:source", "project-1:region:destination"
+        )
 
-        mock_table_select.return_value = MagicMock()
-        mock_table_delete.return_value = MagicMock()
+    assert mock_post.call_args_list[0].kwargs["timeout"] == (3.0, 45.0)
+    assert mock_post.call_args_list[1].kwargs["timeout"] == (3.0, 45.0)
 
-        mock_result = MagicMock()
-        mock_result.return_value = ["1", "2", "3"]
-        mock_session_execute.return_value = mock_result
 
-        expected_calls = [
-            call(mock_table_select.return_value),
-            call(mock_table_delete.return_value),
-        ]
+@pytest.mark.parametrize("table_name", [None, "", " ", "   "])
+def test_copy_table_data_raises_for_empty_table_name(
+    service_under_test: DatabaseService,
+    table_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="table_name cannot be empty or none"):
+        service_under_test.copy_table_data(
+            table_name,
+            "project-1:region:source",
+            "project-1:region:destination",
+        )
 
-        # act
-        with patch("google.auth.default", return_value=(mock_creds, "gcp-project")):
-            service_under_test.copy_table_data(
-                table_name, source_instance_name, destination_instance_name
-            )
 
-        # assert
-        print(cast(Any, mock_session_execute.call_args_list))
-        mock_session_execute.assert_has_calls(expected_calls, any_order=True)
+def _operation_response(operation_name: str) -> Mock:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"name": operation_name}
+    return response
+
+
+def _done_response() -> Mock:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"status": "DONE"}
+    return response

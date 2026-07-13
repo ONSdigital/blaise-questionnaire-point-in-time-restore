@@ -1,3 +1,5 @@
+import json
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -7,6 +9,11 @@ import google.auth
 import requests
 from google.auth.transport.requests import Request
 from google.cloud import secretmanager
+
+_BLAISE_INSTANCE_NAME_PATTERN = re.compile(
+    r"^blaise-[a-z0-9-]+-[a-z0-9-]{8,}$", re.IGNORECASE
+)
+_MIN_EXPECTED_INSTANCE_NAME_PARTS = 3
 
 
 def parse_uk_local_timestamp(value: str) -> datetime:
@@ -77,8 +84,7 @@ def _discover_access_token() -> str:
 
 
 def discover_destination_instance_name(project_id: str) -> str:
-
-    connection_names: list[str] = []
+    instances: list[tuple[str, str]] = []
 
     try:
         token = _discover_access_token()
@@ -92,16 +98,16 @@ def discover_destination_instance_name(project_id: str) -> str:
         )
         response.raise_for_status()
 
-        instances = response.json().get("items", [])
-        connection_names = [
-            str(instance["connectionName"])
-            for instance in instances
-            if "connectionName" in instance
+        response_instances = response.json().get("items", [])
+        instances = [
+            (str(instance["name"]), str(instance["connectionName"]))
+            for instance in response_instances
+            if "name" in instance and "connectionName" in instance
         ]
     except Exception:
-        connection_names = []
+        instances = []
 
-    if not connection_names:
+    if not instances:
         try:
             result = subprocess.run(
                 [
@@ -111,38 +117,80 @@ def discover_destination_instance_name(project_id: str) -> str:
                     "list",
                     "--project",
                     project_id,
-                    "--format=value(connectionName)",
+                    "--format=json",
                 ],
                 check=True,
                 capture_output=True,
                 text=True,
             )
-            connection_names = [
-                line.strip() for line in result.stdout.splitlines() if line.strip()
-            ]
+            parsed_instances = json.loads(result.stdout)
+            if isinstance(parsed_instances, list):
+                instances = [
+                    (str(instance["name"]), str(instance["connectionName"]))
+                    for instance in parsed_instances
+                    if isinstance(instance, dict)
+                    and "name" in instance
+                    and "connectionName" in instance
+                ]
+            else:
+                instances = []
         except Exception:
-            connection_names = []
+            try:
+                legacy_result = subprocess.run(
+                    [
+                        "gcloud",
+                        "sql",
+                        "instances",
+                        "list",
+                        "--project",
+                        project_id,
+                        "--format=value(connectionName)",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                instances = [
+                    (line.rsplit(":", maxsplit=1)[-1], line)
+                    for line in legacy_result.stdout.splitlines()
+                    if line.strip()
+                ]
+            except Exception:
+                instances = []
 
-    if not connection_names:
+    if not instances:
         sys.exit(
             "Error: Could not discover a Cloud SQL instance automatically. "
             "Ensure gcloud auth works and a project is configured."
         )
 
-    if len(connection_names) == 1:
-        return connection_names[0]
-
-    preferred_instances = [
-        name
-        for name in connection_names
-        if "clone" not in name.lower() and "pitr" not in name.lower()
+    eligible_instances = [
+        instance
+        for instance in instances
+        if _BLAISE_INSTANCE_NAME_PATTERN.match(instance[0])
     ]
-    if len(preferred_instances) == 1:
-        return preferred_instances[0]
 
+    if len(eligible_instances) == 1:
+        return eligible_instances[0][1]
+
+    if not eligible_instances:
+        discovered_instance_names = ", ".join(
+            sorted(instance_name for instance_name, _ in instances)
+        )
+        sys.exit(
+            "Error: No Cloud SQL instance matched expected naming convention "
+            "'blaise-<env>-<random-guid>'. Discovered instances: "
+            f"{discovered_instance_names}"
+        )
+
+    matched_instance_names = ", ".join(
+        sorted(instance_name for instance_name, _ in eligible_instances)
+    )
     sys.exit(
-        "Error: Multiple Cloud SQL instances found and no unambiguous live "
-        "instance could be selected automatically."
+        "Error: Multiple Cloud SQL instances matched expected naming convention "
+        "'blaise-<env>-<random-guid>'. Refusing to choose automatically. "
+        "Matched instances: "
+        f"{matched_instance_names}"
     )
 
 
@@ -215,9 +263,19 @@ def discover_database_name(project_id: str, instance_connection_name: str) -> st
         if len(preferred_names) == 1:
             return preferred_names[0]
 
-        return sorted(user_databases)[0]
+        discovered_user_databases = ", ".join(sorted(user_databases))
+        sys.exit(
+            "Error: Multiple non-system databases found and no unambiguous "
+            "database could be selected automatically. "
+            f"Discovered user databases: {discovered_user_databases}"
+        )
 
-    return database_names[0]
+    discovered_databases = ", ".join(sorted(database_names))
+    sys.exit(
+        "Error: No non-system database found for destination instance. "
+        "Refusing to use a system database automatically. "
+        f"Discovered databases: {discovered_databases}"
+    )
 
 
 def discover_database_username() -> str:
@@ -265,16 +323,32 @@ def discover_database_password(project_id: str) -> str:
     )
 
 
+def discover_restore_bucket_name(instance_connection_name: str) -> str:
+    instance_name = instance_connection_name.rsplit(":", maxsplit=1)[-1]
+    parts = instance_name.split("-")
+    if (
+        len(parts) < _MIN_EXPECTED_INSTANCE_NAME_PARTS
+        or parts[0].lower() != "blaise"
+    ):
+        sys.exit(
+            "Error: Could not infer environment from Cloud SQL instance name. "
+            "Expected format like 'blaise-<env>-<id>'."
+        )
+
+    environment_name = parts[1].lower()
+    return f"ons-blaise-v2-{environment_name}-backups"
+
+
 class Settings:
     DEST_PROJECT_ID = discover_project_id()
     DEST_INSTANCE_NAME = discover_destination_instance_name(DEST_PROJECT_ID)
     RESTORE_SOURCE_INSTANCE_NAME = DEST_INSTANCE_NAME
     DEST_DB_NAME = discover_database_name(DEST_PROJECT_ID, DEST_INSTANCE_NAME)
-    DEST_DB_DRIVER = "pymysql"
-    DEST_DB_URL = "mysql+pymysql://"
-    DEST_DB_USERNAME = discover_database_username()
-    DEST_DB_PASSWORD = discover_database_password(DEST_PROJECT_ID)
+    RESTORE_GCS_BUCKET = discover_restore_bucket_name(DEST_INSTANCE_NAME)
+    RESTORE_GCS_PREFIX = "questionnaire-pitr"
 
     CLONE_NAME_PREFIX = "pitr"
     CLONE_OPERATION_POLL_SECONDS = 5
     CLONE_OPERATION_TIMEOUT_SECONDS = 1800
+    CLONE_HTTP_CONNECT_TIMEOUT_SECONDS = 5.0
+    CLONE_HTTP_READ_TIMEOUT_SECONDS = 30.0

@@ -1,233 +1,210 @@
-from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
-from models.database_connection_model import DatabaseConnectionModel
+import pytest
+
 from services.database_service import DatabaseService
 
+_EXPECTED_POST_CALLS = 2
+_EXPECTED_RETRY_POST_CALLS = 3
 
-def _build_connection_model(password: str) -> DatabaseConnectionModel:
-    return DatabaseConnectionModel(
-        instance_name="proj:reg:instance",
-        database_name="db",
-        database_username="user",
-        database_password=password,
-        database_driver="pymysql",
-        database_url="mysql+pymysql://",
+
+def _build_service() -> DatabaseService:
+    auth_service = Mock()
+    auth_service.get_credentials_token.return_value = "token-123"
+    return DatabaseService(
+        authorisation_service=auth_service,
+        project_id="proj",
+        database_name="blaise",
+        export_bucket_name="ons-blaise-v2-dev-backups",
+        export_prefix="questionnaire-pitr",
+        operation_timeout_seconds=60,
+        operation_poll_seconds=1,
     )
 
 
-def test_resolve_table_name_returns_input_when_inspector_raises() -> None:
-    service = DatabaseService(_build_connection_model("password"))
+def _response_with_operation(operation_name: str) -> Mock:
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"name": operation_name}
+    return response
+
+
+def test_copy_table_data_exports_then_imports_using_same_gcs_uri() -> None:
+    service = _build_service()
+
+    with (
+        patch(
+            "services.database_service.requests.post",
+            side_effect=[
+                _response_with_operation("export-op"),
+                _response_with_operation("import-op"),
+            ],
+        ) as mock_post,
+        patch("services.database_service.requests.get") as mock_get,
+    ):
+        done_response = Mock()
+        done_response.raise_for_status.return_value = None
+        done_response.json.side_effect = [
+            {"status": "DONE", "name": "export-op"},
+            {"status": "DONE", "name": "import-op"},
+        ]
+        mock_get.return_value = done_response
+
+        service.copy_table_data(
+            table_name="LMS2601_KX2_DML",
+            source_instance_name="proj:region:clone",
+            destination_instance_name="proj:region:dest",
+        )
+
+    assert mock_post.call_count == _EXPECTED_POST_CALLS
+    first_call = mock_post.call_args_list[0]
+    second_call = mock_post.call_args_list[1]
+
+    assert first_call.kwargs["url"].endswith("/projects/proj/instances/clone/export")
+    assert second_call.kwargs["url"].endswith("/projects/proj/instances/dest/import")
+
+    export_uri = first_call.kwargs["json"]["exportContext"]["uri"]
+    assert export_uri.startswith("gs://ons-blaise-v2-dev-backups/questionnaire-pitr/")
+    assert "lms2601_kx2_dml" in export_uri
+
+    import_uri = second_call.kwargs["json"]["importContext"]["uri"]
+    assert import_uri == export_uri
+
+
+def test_copy_table_data_raises_when_export_operation_name_missing() -> None:
+    service = _build_service()
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {}
+
+    with (
+        patch("services.database_service.requests.post", return_value=response),
+        pytest.raises(ValueError, match="export succeeded but no operation name"),
+    ):
+        service.copy_table_data("TABLE_DML", "proj:region:source", "proj:region:dest")
+
+
+def test_copy_table_data_retries_export_when_precondition_fails() -> None:
+    service = _build_service()
+
+    precondition_response = Mock()
+    precondition_response.status_code = 412
+    precondition_response.ok = False
+    precondition_response.text = "instance not ready"
+    precondition_response.raise_for_status = Mock(side_effect=AssertionError)
+
+    with (
+        patch(
+            "services.database_service.requests.post",
+            side_effect=[
+                precondition_response,
+                _response_with_operation("export-op"),
+                _response_with_operation("import-op"),
+            ],
+        ) as mock_post,
+        patch("services.database_service.requests.get") as mock_get,
+        patch("services.database_service.time.sleep") as mock_sleep,
+    ):
+        done_response = Mock()
+        done_response.status_code = 200
+        done_response.ok = True
+        done_response.raise_for_status.return_value = None
+        done_response.json.side_effect = [
+            {"status": "DONE", "name": "export-op"},
+            {"status": "DONE", "name": "import-op"},
+        ]
+        mock_get.return_value = done_response
+
+        service.copy_table_data("TABLE_DML", "proj:region:source", "proj:region:dest")
+
+    assert mock_post.call_count == _EXPECTED_RETRY_POST_CALLS
+    mock_sleep.assert_called_once_with(5)
+
+
+def test_wait_for_operation_raises_on_operation_error() -> None:
+    service = _build_service()
+
+    error_response = Mock()
+    error_response.raise_for_status.return_value = None
+    error_response.json.return_value = {
+        "status": "DONE",
+        "error": {"message": "failed"},
+    }
+
+    with (
+        patch("services.database_service.requests.get", return_value=error_response),
+        pytest.raises(RuntimeError, match="Cloud SQL operation failed"),
+    ):
+        cast(Any, service)._DatabaseService__wait_for_operation("op-1")
+
+
+def test_wait_for_operation_times_out() -> None:
+    auth_service = Mock()
+    auth_service.get_credentials_token.return_value = "token-123"
+    service = DatabaseService(
+        authorisation_service=auth_service,
+        project_id="proj",
+        database_name="blaise",
+        export_bucket_name="ons-blaise-v2-dev-backups",
+        export_prefix="questionnaire-pitr",
+        operation_timeout_seconds=1,
+        operation_poll_seconds=1,
+    )
+
+    running_response = Mock()
+    running_response.raise_for_status.return_value = None
+    running_response.json.return_value = {"status": "RUNNING"}
+
+    with (
+        patch("services.database_service.requests.get", return_value=running_response),
+        patch(
+            "services.database_service.time.monotonic",
+            side_effect=[0.0, 0.0, 2.0, 2.0],
+        ),
+        pytest.raises(TimeoutError, match="Timed out"),
+    ):
+        cast(Any, service)._DatabaseService__wait_for_operation("op-1")
+
+
+def test_create_export_request_body_contains_expected_table_and_database() -> None:
+    service = _build_service()
+
+    body = cast(Any, service)._DatabaseService__create_export_request_body(
+        "TABLE_DML", "gs://bucket/path/table.sql.gz"
+    )
+
+    assert body == {
+        "exportContext": {
+            "fileType": "SQL",
+            "uri": "gs://bucket/path/table.sql.gz",
+            "databases": ["blaise"],
+            "sqlExportOptions": {
+                "tables": ["TABLE_DML"],
+                "schemaOnly": False,
+            },
+        }
+    }
+
+
+def test_request_with_authorisation_retry_retries_once_on_unauthorized() -> None:
+    service = _build_service()
+    unauthorized_response = Mock()
+    unauthorized_response.status_code = 401
+
+    success_response = Mock()
+    success_response.status_code = 200
 
     with patch(
-        "services.database_service.sqlalchemy.inspect", side_effect=RuntimeError("boom")
-    ):
-        resolved = cast(Any, service)._DatabaseService__resolve_table_name(
-            Mock(), "LMS2601_DML"
+        "services.database_service.requests.get",
+        side_effect=[unauthorized_response, success_response],
+    ) as mock_get:
+        response = cast(
+            Any, service
+        )._DatabaseService__request_with_authorisation_retry(
+            "get",
+            "https://sqladmin.googleapis.com/test",
         )
 
-    assert resolved == "LMS2601_DML"
-
-
-def test_resolve_table_name_returns_input_when_table_names_not_list() -> None:
-    service = DatabaseService(_build_connection_model("password"))
-    inspector = SimpleNamespace(get_table_names=lambda: "not-a-list")
-
-    with patch("services.database_service.sqlalchemy.inspect", return_value=inspector):
-        resolved = cast(Any, service)._DatabaseService__resolve_table_name(
-            Mock(), "LMS2601_DML"
-        )
-
-    assert resolved == "LMS2601_DML"
-
-
-def test_resolve_table_name_finds_case_insensitive_match() -> None:
-    service = DatabaseService(_build_connection_model("password"))
-    inspector = SimpleNamespace(get_table_names=lambda: ["lms2601_dml", "other"])
-
-    with patch("services.database_service.sqlalchemy.inspect", return_value=inspector):
-        resolved = cast(Any, service)._DatabaseService__resolve_table_name(
-            Mock(), "LMS2601_DML"
-        )
-
-    assert resolved == "lms2601_dml"
-
-
-def test_resolve_table_name_returns_exact_match_when_present() -> None:
-    service = DatabaseService(_build_connection_model("password"))
-    inspector = SimpleNamespace(get_table_names=lambda: ["LMS2601_DML", "other"])
-
-    with patch("services.database_service.sqlalchemy.inspect", return_value=inspector):
-        resolved = cast(Any, service)._DatabaseService__resolve_table_name(
-            Mock(), "LMS2601_DML"
-        )
-
-    assert resolved == "LMS2601_DML"
-
-
-def test_resolve_table_name_returns_input_when_no_match_exists() -> None:
-    service = DatabaseService(_build_connection_model("password"))
-    inspector = SimpleNamespace(get_table_names=lambda: ["different_table"])
-
-    with patch("services.database_service.sqlalchemy.inspect", return_value=inspector):
-        resolved = cast(Any, service)._DatabaseService__resolve_table_name(
-            Mock(), "LMS2601_DML"
-        )
-
-    assert resolved == "LMS2601_DML"
-
-
-def test_get_connection_uses_iam_auth_when_password_empty() -> None:
-    connection_model = _build_connection_model("")
-    service = DatabaseService(connection_model)
-
-    with patch("services.database_service.Connector") as mock_connector_class:
-        mock_connector = Mock()
-        mock_connector.connect.return_value = Mock()
-        mock_connector_class.return_value = mock_connector
-
-        cast(Any, service)._DatabaseService__get_connection(
-            "proj:reg:inst", connection_model
-        )
-
-    connect_kwargs = mock_connector.connect.call_args.kwargs
-    assert connect_kwargs["enable_iam_auth"] is True
-    assert "password" not in connect_kwargs
-
-
-def test_copy_table_data_inserts_each_source_row_into_destination() -> None:
-    service = DatabaseService(_build_connection_model("password"))
-
-    source_engine = Mock()
-    destination_engine = Mock()
-    source_table = Mock()
-    destination_table = Mock()
-    source_table.select.return_value = "source-select"
-    destination_table.delete.return_value = "destination-delete"
-
-    source_session = Mock()
-    destination_session = Mock()
-    source_session.execute.return_value = [{"id": 1}, {"id": 2}]
-
-    source_begin_context = Mock()
-    source_begin_context.__enter__ = Mock(return_value=None)
-    source_begin_context.__exit__ = Mock(return_value=False)
-    source_session.begin.return_value = source_begin_context
-
-    destination_begin_context = Mock()
-    destination_begin_context.__enter__ = Mock(return_value=None)
-    destination_begin_context.__exit__ = Mock(return_value=False)
-    destination_session.begin.return_value = destination_begin_context
-
-    source_context = Mock()
-    source_context.__enter__ = Mock(return_value=source_session)
-    source_context.__exit__ = Mock(return_value=False)
-
-    destination_context = Mock()
-    destination_context.__enter__ = Mock(return_value=destination_session)
-    destination_context.__exit__ = Mock(return_value=False)
-
-    with (
-        patch.object(
-            service,
-            "_DatabaseService__get_database",
-            side_effect=[source_engine, destination_engine],
-        ),
-        patch.object(
-            service,
-            "_DatabaseService__resolve_table_name",
-            side_effect=["TABLE_DML", "TABLE_DML"],
-        ),
-        patch.object(
-            service,
-            "_DatabaseService__get_table",
-            side_effect=[source_table, destination_table],
-        ),
-        patch(
-            "services.database_service.Session",
-            side_effect=[source_context, destination_context],
-        ),
-        patch("services.database_service.insert") as mock_insert,
-    ):
-        insert_builder = Mock()
-        insert_builder.values.side_effect = ["insert-row-1", "insert-row-2"]
-        mock_insert.return_value = insert_builder
-
-        service.copy_table_data("TABLE_DML", "source", "destination")
-
-    destination_session.execute.assert_any_call("destination-delete")
-    destination_session.execute.assert_any_call("insert-row-1")
-    destination_session.execute.assert_any_call("insert-row-2")
-
-
-def test_copy_table_data_logs_when_resolved_table_names_differ() -> None:
-    service = DatabaseService(_build_connection_model("password"))
-
-    source_engine = Mock()
-    destination_engine = Mock()
-    source_table = Mock()
-    destination_table = Mock()
-    source_table.select.return_value = "source-select"
-    destination_table.delete.return_value = "destination-delete"
-
-    source_session = Mock()
-    destination_session = Mock()
-    source_session.execute.return_value = []
-
-    source_begin_context = Mock()
-    source_begin_context.__enter__ = Mock(return_value=None)
-    source_begin_context.__exit__ = Mock(return_value=False)
-    source_session.begin.return_value = source_begin_context
-
-    destination_begin_context = Mock()
-    destination_begin_context.__enter__ = Mock(return_value=None)
-    destination_begin_context.__exit__ = Mock(return_value=False)
-    destination_session.begin.return_value = destination_begin_context
-
-    source_context = Mock()
-    source_context.__enter__ = Mock(return_value=source_session)
-    source_context.__exit__ = Mock(return_value=False)
-
-    destination_context = Mock()
-    destination_context.__enter__ = Mock(return_value=destination_session)
-    destination_context.__exit__ = Mock(return_value=False)
-
-    with (
-        patch.object(
-            service,
-            "_DatabaseService__get_database",
-            side_effect=[source_engine, destination_engine],
-        ),
-        patch.object(
-            service,
-            "_DatabaseService__resolve_table_name",
-            side_effect=["table_dml", "TABLE_DML"],
-        ),
-        patch.object(
-            service,
-            "_DatabaseService__get_table",
-            side_effect=[source_table, destination_table],
-        ),
-        patch(
-            "services.database_service.Session",
-            side_effect=[source_context, destination_context],
-        ),
-        patch("services.database_service.insert") as mock_insert,
-        patch("services.database_service.LOGGER.info") as mock_logger_info,
-    ):
-        insert_builder = Mock()
-        insert_builder.values.return_value = "unused-insert"
-        mock_insert.return_value = insert_builder
-
-        service.copy_table_data("TABLE_DML", "source", "destination")
-
-    assert any(
-        call.args
-        and call.args[0]
-        == (
-            "Resolved table names; requested=%s source_resolved=%s "
-            "destination_resolved=%s"
-        )
-        for call in mock_logger_info.call_args_list
-    )
+    assert response is success_response
+    assert mock_get.call_count == _EXPECTED_POST_CALLS

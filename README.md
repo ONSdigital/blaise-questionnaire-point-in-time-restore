@@ -1,6 +1,6 @@
 # Blaise Questionnaire Point-in-Time Restore 🔄
 
-This function restores questionnaire data for a specific point in time by creating a temporary Cloud SQL clone and copying data from that clone into the live database.
+This function restores questionnaire data for a specific point in time by creating a temporary Cloud SQL clone, exporting the questionnaire tables to GCS, and importing them into the live database.
 
 Full instance-level restore operations are still done through the GCP console.
 
@@ -22,17 +22,18 @@ The wrapper script then:
 Inside the Cloud Function, the Python application:
 
 1. Builds a point-in-time clone of the source Cloud SQL instance.
-2. Restores questionnaire data from the clone into the destination instance.
+2. Exports questionnaire tables from the clone to GCS.
+3. Imports those exported SQL files into the destination instance.
 3. Deletes the temporary Cloud SQL clone.
 
 ## What Gets Restored
 
 The restore currently targets two tables per questionnaire:
 
-- `<QUESTIONNAIRE_NAME>_DML`
-- `<QUESTIONNAIRE_NAME>_FORM`
+- `<QUESTIONNAIRE_NAME>_Dml`
+- `<QUESTIONNAIRE_NAME>_Form`
 
-The destination table is replaced with data from the clone (delete existing rows, then insert source rows).
+The destination table is restored from SQL export files generated from the clone.
 
 ## Prerequisites
 
@@ -68,7 +69,7 @@ The function discovers everything from the authenticated project context:
 - Active project from ADC/gcloud auth context
 - Destination Cloud SQL instance from the project instances list
 - Destination database name from the instance database list
-- Destination DB password from Secret Manager secret `cloudsql_pw`
+- GCS backup bucket derived from instance environment, e.g. `ons-blaise-v2-dev-backups`
 - Source instance is the same as destination instance (clone from live)
 
 ## Usage
@@ -103,8 +104,8 @@ When you run `make run <questionnaire_name> <timestamp>`:
 5. In function runtime:
    - Validate source/destination instances are available.
    - Create point-in-time clone.
-   - Copy `<QUESTIONNAIRE>_DML` from clone to destination.
-   - Copy `<QUESTIONNAIRE>_FORM` from clone to destination.
+   - Export `<QUESTIONNAIRE>_Dml` from clone to GCS and import to destination.
+   - Export `<QUESTIONNAIRE>_Form` from clone to GCS and import to destination.
    - Delete clone.
 6. Wrapper cleanup runs (even on failure):
    - Delete temporary function.

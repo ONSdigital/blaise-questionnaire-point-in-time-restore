@@ -41,6 +41,7 @@ def test_create_clone_returns_operation_name(
 
     assert operation == "op-create"
     mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["timeout"] == (5.0, 30.0)
 
 
 def test_create_clone_raises_when_no_operation_name(
@@ -73,10 +74,11 @@ def test_delete_clone_returns_operation_name(
 
     with patch(
         "services.database_clone_service.requests.delete", return_value=response
-    ):
+    ) as mock_delete:
         operation = clone_service.delete_clone("clone-instance")
 
     assert operation == "op-delete"
+    assert mock_delete.call_args.kwargs["timeout"] == (5.0, 30.0)
 
 
 def test_delete_clone_handles_deletion_protection(
@@ -182,10 +184,13 @@ def test_get_instance_returns_payload(clone_service: DatabaseCloneService) -> No
     response.raise_for_status.return_value = None
     response.json.return_value = {"name": "i1", "connectionName": "proj:reg:i1"}
 
-    with patch("services.database_clone_service.requests.get", return_value=response):
+    with patch(
+        "services.database_clone_service.requests.get", return_value=response
+    ) as mock_get:
         instance = clone_service.get_instance("i1")
 
     assert instance["name"] == "i1"
+    assert mock_get.call_args.kwargs["timeout"] == (5.0, 30.0)
 
 
 def test_instance_exists_returns_false_on_404(
@@ -194,10 +199,13 @@ def test_instance_exists_returns_false_on_404(
     response = Mock()
     response.status_code = 404
 
-    with patch("services.database_clone_service.requests.get", return_value=response):
+    with patch(
+        "services.database_clone_service.requests.get", return_value=response
+    ) as mock_get:
         exists = clone_service.instance_exists("missing")
 
     assert exists is False
+    assert mock_get.call_args.kwargs["timeout"] == (5.0, 30.0)
 
 
 def test_instance_exists_returns_true_for_existing_instance(
@@ -220,10 +228,35 @@ def test_wait_for_operation_returns_when_done(
     response.raise_for_status.return_value = None
     response.json.return_value = {"status": "DONE", "name": "op1"}
 
-    with patch("services.database_clone_service.requests.get", return_value=response):
+    with patch(
+        "services.database_clone_service.requests.get", return_value=response
+    ) as mock_get:
         operation = clone_service.wait_for_operation("op1", timeout_seconds=30)
 
     assert operation["status"] == "DONE"
+    assert mock_get.call_args.kwargs["timeout"] == (5.0, 30.0)
+
+
+def test_clone_service_supports_custom_http_timeouts(
+    authorisation_service: Mock,
+) -> None:
+    clone_service = DatabaseCloneService(
+        authorisation_service=authorisation_service,
+        project_id="proj",
+        http_connect_timeout_seconds=3.0,
+        http_read_timeout_seconds=45.0,
+    )
+
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"name": "i1", "connectionName": "proj:reg:i1"}
+
+    with patch(
+        "services.database_clone_service.requests.get", return_value=response
+    ) as mock_get:
+        clone_service.get_instance("i1")
+
+    assert mock_get.call_args.kwargs["timeout"] == (3.0, 45.0)
 
 
 def test_wait_for_operation_raises_for_operation_error(
@@ -279,7 +312,7 @@ def test_wait_for_operation_polls_until_done(
         ),
         patch(
             "services.database_clone_service.time.monotonic",
-            side_effect=[0.0, 0.0, 0.5, 1.0, 1.5, 2.0],
+            side_effect=[0.0, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
         ),
         patch("services.database_clone_service.time.sleep") as mock_sleep,
     ):
@@ -289,6 +322,28 @@ def test_wait_for_operation_polls_until_done(
 
     assert operation["status"] == "DONE"
     mock_sleep.assert_called_once_with(2)
+
+
+def test_wait_for_operation_retries_once_when_unauthorized(
+    clone_service: DatabaseCloneService,
+) -> None:
+    unauthorized_response = Mock()
+    unauthorized_response.status_code = 401
+
+    done_response = Mock()
+    done_response.status_code = 200
+    done_response.raise_for_status.return_value = None
+    done_response.json.return_value = {"status": "DONE", "name": "op1"}
+
+    with patch(
+        "services.database_clone_service.requests.get",
+        side_effect=[unauthorized_response, done_response],
+    ) as mock_get:
+        operation = clone_service.wait_for_operation("op1", timeout_seconds=30)
+
+    assert operation["status"] == "DONE"
+    expected_get_calls = 2
+    assert mock_get.call_count == expected_get_calls
 
 
 def test_create_clone_request_body_normalizes_to_utc_z_suffix() -> None:

@@ -116,7 +116,7 @@ class PitrOrchestratorService:
                 clone_connection_name,
                 request.destination_instance_name,
             )
-            self._restore_service.restore_questionnaire_dml_data(
+            self._restore_service.restore_questionnaire_tables(
                 request.questionnaire_name,
                 source_instance_name=clone_connection_name,
                 destination_instance_name=request.destination_instance_name,
@@ -128,14 +128,14 @@ class PitrOrchestratorService:
                 ),
                 request.request_id,
                 request.questionnaire_name,
-                f"{request.questionnaire_name}_DML,{request.questionnaire_name}_FORM",
+                    f"{request.questionnaire_name}_Dml,{request.questionnaire_name}_Form",
             )
         except Exception as error:
             restore_error = error
             LOGGER.exception(
                 "Restore failed; request_id=%s clone=%s destination=%s. "
-                "Check Cloud SQL IAM permissions on the clone, especially "
-                "cloudsql.instances.get/connect.",
+                "Inspect prior Cloud SQL export/import logs for the failing "
+                "table and operation details.",
                 request.request_id,
                 clone_instance_name,
                 request.destination_instance_name,
@@ -194,7 +194,6 @@ class PitrOrchestratorService:
             )
             return clone_instance_name
         except Exception:
-            # Keep stale clone in place and use a unique clone name for this run.
             fallback_clone_name = self.__build_retry_clone_name(
                 request.clone_instance_name
             )

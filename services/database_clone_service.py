@@ -11,6 +11,7 @@ from services.authorisation_service import AuthorisationService
 LOGGER = logging.getLogger(__name__)
 HTTP_NOT_FOUND = 404
 HTTP_BAD_REQUEST = 400
+HTTP_UNAUTHORIZED = 401
 
 
 class DatabaseCloneService:
@@ -19,18 +20,24 @@ class DatabaseCloneService:
         authorisation_service: AuthorisationService,
         project_id: str,
         sql_admin_api_url: str = "https://sqladmin.googleapis.com/sql/v1beta4",
+        http_connect_timeout_seconds: float = 5.0,
+        http_read_timeout_seconds: float = 30.0,
     ):
         self._authorisation_service = authorisation_service
         self._project_id = project_id
         self._sql_admin_api_url = sql_admin_api_url.rstrip("/")
+        self._http_timeout = (
+            http_connect_timeout_seconds,
+            http_read_timeout_seconds,
+        )
 
     def create_clone(self, database_clone_model: DatabaseCloneModel) -> str:
         clone_api_url = self.__get_instance_api_url(
             database_clone_model.source_instance_name
         )
-        response = requests.post(
+        response = self.__request_with_authorisation_retry(
+            method="post",
             url=f"{clone_api_url}/clone",
-            headers=self.__create_authorisation_headers(),
             json=self.__create_clone_request_body(database_clone_model),
         )
         response.raise_for_status()
@@ -53,9 +60,9 @@ class DatabaseCloneService:
         return str(operation_name)
 
     def delete_clone(self, instance_name: str) -> str:
-        response = requests.delete(
+        response = self.__request_with_authorisation_retry(
+            method="delete",
             url=self.__get_instance_api_url(instance_name),
-            headers=self.__create_authorisation_headers(),
         )
 
         if (
@@ -66,9 +73,9 @@ class DatabaseCloneService:
                 "Delete blocked by deletion protection; instance=%s", instance_name
             )
             self.__disable_deletion_protection(instance_name)
-            response = requests.delete(
+            response = self.__request_with_authorisation_retry(
+                method="delete",
                 url=self.__get_instance_api_url(instance_name),
-                headers=self.__create_authorisation_headers(),
             )
 
         response.raise_for_status()
@@ -89,9 +96,9 @@ class DatabaseCloneService:
         return str(operation_name)
 
     def get_instance(self, instance_name: str) -> dict[str, Any]:
-        response = requests.get(
+        response = self.__request_with_authorisation_retry(
+            method="get",
             url=self.__get_instance_api_url(instance_name),
-            headers=self.__create_authorisation_headers(),
         )
         response.raise_for_status()
 
@@ -101,9 +108,9 @@ class DatabaseCloneService:
         return dict(instance)
 
     def instance_exists(self, instance_name: str) -> bool:
-        response = requests.get(
+        response = self.__request_with_authorisation_retry(
+            method="get",
             url=self.__get_instance_api_url(instance_name),
-            headers=self.__create_authorisation_headers(),
         )
         if response.status_code == HTTP_NOT_FOUND:
             LOGGER.info("Cloud SQL instance not found; instance=%s", instance_name)
@@ -134,9 +141,9 @@ class DatabaseCloneService:
         )
 
         while True:
-            response = requests.get(
+            response = self.__request_with_authorisation_retry(
+                method="get",
                 url=self.__get_operation_api_url(operation_name),
-                headers=self.__create_authorisation_headers(),
             )
             response.raise_for_status()
             operation = dict(response.json())
@@ -191,9 +198,9 @@ class DatabaseCloneService:
         """Disable deletion protection, starting a STOPPED instance if required."""
         patch_body: dict[str, Any] = {"settings": {"deletionProtectionEnabled": False}}
 
-        response = requests.patch(
+        response = self.__request_with_authorisation_retry(
+            method="patch",
             url=self.__get_instance_api_url(instance_name),
-            headers=self.__create_authorisation_headers(),
             json=patch_body,
         )
 
@@ -212,9 +219,9 @@ class DatabaseCloneService:
                 "deletionProtectionEnabled": False,
                 "activationPolicy": "ALWAYS",
             }
-            response = requests.patch(
+            response = self.__request_with_authorisation_retry(
+                method="patch",
                 url=self.__get_instance_api_url(instance_name),
-                headers=self.__create_authorisation_headers(),
                 json=patch_body,
             )
 
@@ -235,6 +242,30 @@ class DatabaseCloneService:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+
+    def __request_with_authorisation_retry(
+        self, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        request_method = getattr(requests, method)
+        response = request_method(
+            url=url,
+            headers=self.__create_authorisation_headers(),
+            timeout=self._http_timeout,
+            **kwargs,
+        )
+        if response.status_code != HTTP_UNAUTHORIZED:
+            return response
+
+        LOGGER.warning(
+            "Unauthorized response from SQL Admin API; retrying once; url=%s",
+            url,
+        )
+        return request_method(
+            url=url,
+            headers=self.__create_authorisation_headers(),
+            timeout=self._http_timeout,
+            **kwargs,
+        )
 
     def __get_instance_api_url(self, instance_name: str) -> str:
         normalized_instance_name = self.__normalize_instance_name(instance_name)

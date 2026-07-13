@@ -18,13 +18,13 @@ class FakeSettings:
     DEST_INSTANCE_NAME = "project-1:region:dest"
     RESTORE_SOURCE_INSTANCE_NAME = "project-1:region:source"
     DEST_DB_NAME = "blaise"
-    DEST_DB_DRIVER = "pymysql"
-    DEST_DB_URL = "mysql+pymysql://"
-    DEST_DB_USERNAME = "blaise"
-    DEST_DB_PASSWORD = "password"
+    RESTORE_GCS_BUCKET = "ons-blaise-v2-dev-backups"
+    RESTORE_GCS_PREFIX = "questionnaire-pitr"
     CLONE_NAME_PREFIX = "pitr"
     CLONE_OPERATION_POLL_SECONDS = 5
     CLONE_OPERATION_TIMEOUT_SECONDS = 1800
+    CLONE_HTTP_CONNECT_TIMEOUT_SECONDS = 5.0
+    CLONE_HTTP_READ_TIMEOUT_SECONDS = 30.0
 
 
 def _load_main_module() -> ModuleType:
@@ -40,7 +40,10 @@ def _load_main_module() -> ModuleType:
         patch("google.cloud.logging.Client") as mock_logging_client,
         patch(
             "services.authorisation_service.google.auth.default",
-            return_value=(Mock(), "project-1"),
+            return_value=(
+                SimpleNamespace(universe_domain="googleapis.com"),
+                "project-1",
+            ),
         ),
     ):
         mock_client = Mock()
@@ -208,7 +211,10 @@ def test_main_import_falls_back_to_basic_logging_when_cloud_logging_init_fails()
         ),
         patch(
             "services.authorisation_service.google.auth.default",
-            return_value=(Mock(), "project-1"),
+            return_value=(
+                SimpleNamespace(universe_domain="googleapis.com"),
+                "project-1",
+            ),
         ),
         patch("logging.basicConfig") as mock_basic_config,
     ):

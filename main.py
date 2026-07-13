@@ -7,7 +7,6 @@ import flask
 import google.cloud.logging
 
 from config import Settings, parse_uk_local_timestamp
-from models.database_connection_model import DatabaseConnectionModel
 from services.authorisation_service import AuthorisationService
 from services.database_clone_service import DatabaseCloneService
 from services.database_restore_service import DatabaseRestoreService
@@ -26,22 +25,25 @@ except Exception:
     logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
-connection_model_destination = DatabaseConnectionModel(
-    instance_name=Settings.DEST_INSTANCE_NAME,
-    database_name=Settings.DEST_DB_NAME,
-    database_driver=Settings.DEST_DB_DRIVER,
-    database_url=Settings.DEST_DB_URL,
-    database_username=Settings.DEST_DB_USERNAME,
-    database_password=Settings.DEST_DB_PASSWORD,
-)
-
-database_service = DatabaseService(connection_model_destination)
-database_restore_service = DatabaseRestoreService(database_service)
 authorisation_service = AuthorisationService()
 clone_service = DatabaseCloneService(
     authorisation_service=authorisation_service,
     project_id=Settings.DEST_PROJECT_ID,
+    http_connect_timeout_seconds=Settings.CLONE_HTTP_CONNECT_TIMEOUT_SECONDS,
+    http_read_timeout_seconds=Settings.CLONE_HTTP_READ_TIMEOUT_SECONDS,
 )
+database_service = DatabaseService(
+    authorisation_service=authorisation_service,
+    project_id=Settings.DEST_PROJECT_ID,
+    database_name=Settings.DEST_DB_NAME,
+    export_bucket_name=Settings.RESTORE_GCS_BUCKET,
+    export_prefix=Settings.RESTORE_GCS_PREFIX,
+    operation_timeout_seconds=Settings.CLONE_OPERATION_TIMEOUT_SECONDS,
+    operation_poll_seconds=Settings.CLONE_OPERATION_POLL_SECONDS,
+    http_connect_timeout_seconds=Settings.CLONE_HTTP_CONNECT_TIMEOUT_SECONDS,
+    http_read_timeout_seconds=Settings.CLONE_HTTP_READ_TIMEOUT_SECONDS,
+)
+database_restore_service = DatabaseRestoreService(database_service)
 orchestrator = PitrOrchestratorService(
     clone_service=clone_service,
     restore_service=database_restore_service,
