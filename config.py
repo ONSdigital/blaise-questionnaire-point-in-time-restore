@@ -326,10 +326,7 @@ def discover_database_password(project_id: str) -> str:
 def discover_restore_bucket_name(instance_connection_name: str) -> str:
     instance_name = instance_connection_name.rsplit(":", maxsplit=1)[-1]
     parts = instance_name.split("-")
-    if (
-        len(parts) < _MIN_EXPECTED_INSTANCE_NAME_PARTS
-        or parts[0].lower() != "blaise"
-    ):
+    if len(parts) < _MIN_EXPECTED_INSTANCE_NAME_PARTS or parts[0].lower() != "blaise":
         sys.exit(
             "Error: Could not infer environment from Cloud SQL instance name. "
             "Expected format like 'blaise-<env>-<id>'."

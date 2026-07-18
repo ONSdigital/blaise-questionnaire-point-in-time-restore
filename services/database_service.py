@@ -215,7 +215,9 @@ class DatabaseService:
             f"{safe_table}-{int(time.time())}.sql.gz"
         )
         if self._export_prefix:
-            return f"gs://{self._export_bucket_name}/{self._export_prefix}/{object_name}"
+            return (
+                f"gs://{self._export_bucket_name}/{self._export_prefix}/{object_name}"
+            )
 
         return f"gs://{self._export_bucket_name}/{object_name}"
 

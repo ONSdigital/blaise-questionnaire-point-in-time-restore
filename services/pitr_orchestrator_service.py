@@ -128,7 +128,7 @@ class PitrOrchestratorService:
                 ),
                 request.request_id,
                 request.questionnaire_name,
-                    f"{request.questionnaire_name}_Dml,{request.questionnaire_name}_Form",
+                f"{request.questionnaire_name}_Dml,{request.questionnaire_name}_Form",
             )
         except Exception as error:
             restore_error = error

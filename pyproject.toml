@@ -9,8 +9,6 @@ package-mode = false
 name = "blaise-questionnaire-point-in-time-restore"
 requires-python = ">=3.13,<4.0"
 dependencies = [
-	"sqlalchemy>=2.0.51",
-	"pymysql>=1.2.0",
 	"cloud-sql-python-connector>=1.20.4",
 	"functions-framework>=3.10.2",
 	"flask (>=3.1.3)",
