@@ -1,30 +1,30 @@
-# Blaise Questionnaire Point-in-Time Restore 🔄
+# Blaise Questionnaire Point-in-Time Restore
 
-This function restores questionnaire data for a specific point in time by creating a temporary Cloud SQL clone, exporting the questionnaire tables to GCS, and importing them into the live database.
+This repository contains the source for a deployable HTTP Google Cloud Function. The function restores questionnaire data to a specific point in time by creating a temporary Cloud SQL clone, exporting the questionnaire tables to Cloud Storage, and importing them into the live database.
 
-Full instance-level restore operations are still done through the GCP console.
+The Cloud Function is intended to be packaged and deployed by Terraform maintained in a separate infrastructure repository. This repository does not create infrastructure or deploy itself.
 
-## Current Execution Model
+## Function Contract
 
-You run a wrapper script with two parameters:
+- Runtime: Python 3.13
+- Entry point: `restore_point_in_time_questionnaire`
+- Trigger: HTTP
+- Request content type: `application/json`
+- Maximum execution time: 3600 seconds
+- Recommended memory: at least 512 MiB
 
-- `questionnaire_name`
-- `timestamp` (for example `2026-07-08 14:30:00`)
+The function expects this request body:
 
-The wrapper script then:
+```json
+{
+   "questionnaire_name": "LMS2601_KX2",
+   "timestamp": "2026-07-08 14:30:00"
+}
+```
 
-1. Creates a temporary service account.
-2. Grants required IAM roles.
-3. Deploys a temporary HTTP Cloud Function.
-4. Invokes that function with your parameters.
-5. Cleans up the temporary Cloud Function and service account.
+`timestamp` is parsed as UK local time (`Europe/London`) when no timezone offset is supplied. An ISO 8601 timestamp with an explicit offset is also accepted.
 
-Inside the Cloud Function, the Python application:
-
-1. Builds a point-in-time clone of the source Cloud SQL instance.
-2. Exports questionnaire tables from the clone to GCS.
-3. Imports those exported SQL files into the destination instance.
-3. Deletes the temporary Cloud SQL clone.
+Successful requests return HTTP `200`. Validation failures return HTTP `400`, and restore failures return HTTP `500` with a request ID that can be matched to Cloud Logging entries.
 
 ## What Gets Restored
 
@@ -33,56 +33,62 @@ The restore currently targets two tables per questionnaire:
 - `<QUESTIONNAIRE_NAME>_Dml`
 - `<QUESTIONNAIRE_NAME>_Form`
 
-The destination table is restored from SQL export files generated from the clone.
+The destination tables are restored from SQL export files generated from the clone.
 
-## Prerequisites
+## Deployment
 
-- Python 3.13+
-- [Poetry](https://python-poetry.org/) for dependency management
-- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` CLI) installed and authenticated
-- Permissions to create/delete service accounts, deploy Cloud Functions, manage Cloud SQL, and invoke Cloud Functions
+The Terraform deployment must package the repository root so that `main.py` and `requirements.txt` are at the root of the Cloud Function source archive.
 
-## Setup
+The infrastructure must provide:
 
-1. Clone the repository and install dependencies:
+- A second-generation HTTP Cloud Function using the Python 3.13 runtime.
+- A dedicated runtime service account.
+- A VPC connector with access to the Cloud SQL instance.
+- A timeout that accommodates the restore operation; 3600 seconds is recommended.
+- Authentication on the HTTP endpoint. Do not allow unauthenticated invocation.
+- Cloud SQL Admin and Logs Writer permissions for the runtime service account.
+- Cloud Storage access to the environment backup bucket for the runtime service account and the Cloud SQL instance service account.
+- Cloud Run Invoker permission for operators who invoke the second-generation function.
 
-```bash
-git clone https://github.com/ONSdigital/blaise-questionnaire-point-in-time-restore.git
-cd blaise-questionnaire-point-in-time-restore
-poetry install
+The function uses Application Default Credentials from its runtime service account. Terraform must attach that service account to the function and provide the resource identifiers below as runtime environment variables. Do not pass access tokens, service-account keys, or other credentials through environment variables.
+
+## Runtime Configuration
+
+The following runtime environment variables are required:
+
+| Variable | Value |
+| --- | --- |
+| `PROJECT_ID` | GCP project ID containing the Cloud SQL instance. |
+| `DEST_INSTANCE_NAME` | Cloud SQL instance name or connection name (`project:region:instance`). |
+| `DEST_DB_NAME` | Destination database name, normally `blaise`. |
+| `RESTORE_GCS_BUCKET` | Backup bucket name without the `gs://` prefix. |
+
+The point-in-time restore source is the destination instance itself, so no separate source-instance variable is required. Authentication is provided by the function's attached runtime service account through Application Default Credentials.
+
+Example Terraform configuration for a second-generation function:
+
+```hcl
+service_config {
+  service_account_email = google_service_account.pitr.email
+  timeout_seconds       = 3600
+
+  environment_variables = {
+    PROJECT_ID      = var.project_id
+    DEST_INSTANCE_NAME   = google_sql_database_instance.blaise.connection_name
+    DEST_DB_NAME         = google_sql_database.blaise.name
+    RESTORE_GCS_BUCKET   = google_storage_bucket.backups.name
+  }
+}
 ```
 
-2. Authenticate with Google Cloud:
+## Invoke From GCP Console
 
-```bash
-gcloud auth application-default login
-gcloud auth login
-gcloud config set project <GCP_PROJECT_ID>
-```
+After Terraform has deployed the function:
 
-## Configuration
-
-No runtime environment variables are required or supported for restore behavior.
-
-The function discovers everything from the authenticated project context:
-
-- Active project from ADC/gcloud auth context
-- Destination Cloud SQL instance from the project instances list
-- Destination database name from the instance database list
-- GCS backup bucket derived from instance environment, e.g. `ons-blaise-v2-dev-backups`
-- Source instance is the same as destination instance (clone from live)
-
-## Usage
-
-Run via Make:
-
-```bash
-make run LMS2601_KX2 "2026-07-08 14:30:00"
-```
-
-### Request Parameters Sent to the Cloud Function
-
-The wrapper invokes the HTTP function with JSON:
+1. Open the function in the Google Cloud Console.
+2. Open the testing or invoke view.
+3. Enter the JSON request body shown below.
+4. Invoke the function and wait for the restore to complete.
 
 ```json
 {
@@ -91,37 +97,31 @@ The wrapper invokes the HTTP function with JSON:
 }
 ```
 
-Timestamp input is parsed as UK local time (`Europe/London`) when no timezone is provided.
+The restore runs synchronously. Keep the Console request open until the function responds, and use the returned request ID to locate errors in Cloud Logging.
 
-## End-to-End Flow Details
+## Restore Flow
 
-When you run `make run <questionnaire_name> <timestamp>`:
-
-1. A temporary service account is created.
-2. IAM roles are granted for Cloud SQL, Secret Manager, logging, and invocation.
-3. A temporary Cloud Function is deployed (`restore_questionnaire` entry point).
-4. The function is invoked with your `questionnaire_name` and `timestamp`.
-5. In function runtime:
-   - Validate source/destination instances are available.
-   - Create point-in-time clone.
-   - Export `<QUESTIONNAIRE>_Dml` from clone to GCS and import to destination.
-   - Export `<QUESTIONNAIRE>_Form` from clone to GCS and import to destination.
-   - Delete clone.
-6. Wrapper cleanup runs (even on failure):
-   - Delete temporary function.
-   - Remove temporary service account and role bindings.
-
-## Future Deployment Direction
-
-This temporary deployment model is intended as a bridge. The target model is to deploy this Cloud Function permanently in each project/environment so it can be invoked directly from GCP (for example via Cloud Console/Cloud Functions invocation) without creating a temporary function per run.
+1. Validate and parse the request.
+2. Read the source and destination Cloud SQL configuration supplied by Terraform.
+3. Create a point-in-time clone.
+4. Export `<QUESTIONNAIRE>_Dml` from the clone to Cloud Storage and import it into the destination.
+5. Export `<QUESTIONNAIRE>_Form` from the clone to Cloud Storage and import it into the destination.
+6. Delete the temporary clone, including when a restore step fails.
 
 ## Development
 
-This project includes a `Makefile` with common commands:
+Install development dependencies with Poetry:
 
-- Lint: `make lint`
-- Lint + format fixes: `make lint-fix`
-- Type check: `make typecheck`
-- Dependency check: `make deptry`
-- Dead code scan: `make vulture`
-- Tests: `make test`
+```bash
+poetry install
+```
+
+Run the repository checks directly through Poetry:
+
+```bash
+poetry run ruff check .
+poetry run pyright
+poetry run deptry .
+poetry run vulture .
+poetry run pytest
+```

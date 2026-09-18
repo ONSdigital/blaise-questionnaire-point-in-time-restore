@@ -3,6 +3,7 @@ from typing import Any, cast
 from unittest.mock import Mock, call, patch
 
 import pytest
+import requests
 
 from services.pitr_orchestrator_service import (
     PitrOrchestratorService,
@@ -77,6 +78,64 @@ def test_restore_questionnaire_from_point_in_time_happy_path(
     )
 
 
+def test_deletion_protection_is_disabled_before_restore(
+    clone_service: Mock,
+    restore_service: Mock,
+    pitr_request: PitrRequest,
+) -> None:
+    clone_service.get_instance.side_effect = [
+        {"name": "source"},
+        {"name": "destination"},
+        {
+            "connectionName": "proj:reg:clone-conn",
+            "settings": {"deletionProtectionEnabled": True},
+        },
+    ]
+    parent = Mock()
+    parent.attach_mock(clone_service.disable_deletion_protection, "disable")
+    parent.attach_mock(restore_service.restore_questionnaire_tables, "restore")
+
+    service = PitrOrchestratorService(
+        clone_service=clone_service, restore_service=restore_service
+    )
+
+    service.restore_questionnaire_from_point_in_time(pitr_request)
+
+    assert parent.mock_calls[:2] == [
+        call.disable(pitr_request.clone_instance_name),
+        call.restore(
+            "LMS2601_KX2",
+            source_instance_name="proj:reg:clone-conn",
+            destination_instance_name="proj:reg:dest",
+        ),
+    ]
+
+
+def test_restore_continues_when_proactive_protection_disable_fails(
+    clone_service: Mock,
+    restore_service: Mock,
+    pitr_request: PitrRequest,
+) -> None:
+    clone_service.get_instance.side_effect = [
+        {"name": "source"},
+        {"name": "destination"},
+        {
+            "connectionName": "proj:reg:clone-conn",
+            "settings": {"deletionProtectionEnabled": True},
+        },
+    ]
+    clone_service.disable_deletion_protection.side_effect = requests.ConnectionError(
+        "connection failed"
+    )
+    service = PitrOrchestratorService(
+        clone_service=clone_service, restore_service=restore_service
+    )
+
+    service.restore_questionnaire_from_point_in_time(pitr_request)
+
+    restore_service.restore_questionnaire_tables.assert_called_once()
+
+
 def test_existing_stale_clone_is_deleted_before_recreate(
     clone_service: Mock,
     restore_service: Mock,
@@ -142,19 +201,39 @@ def test_restore_failure_is_reraised_even_if_clone_cleanup_also_fails(
         service.restore_questionnaire_from_point_in_time(pitr_request)
 
 
-def test_cleanup_failure_is_raised_when_restore_succeeds(
+def test_cleanup_failure_does_not_fail_a_successful_restore(
     clone_service: Mock,
     restore_service: Mock,
     pitr_request: PitrRequest,
 ) -> None:
     clone_service.delete_clone.side_effect = RuntimeError("cleanup failed")
+    clone_service.instance_exists.side_effect = [False, True, True, True, True, True]
 
     service = PitrOrchestratorService(
         clone_service=clone_service, restore_service=restore_service
     )
 
-    with pytest.raises(RuntimeError, match="cleanup failed"):
-        service.restore_questionnaire_from_point_in_time(pitr_request)
+    service.restore_questionnaire_from_point_in_time(pitr_request)
+
+    clone_service.delete_clone.assert_called_once()
+
+
+def test_cleanup_uses_request_retry_layer_when_clone_still_exists(
+    clone_service: Mock,
+    restore_service: Mock,
+    pitr_request: PitrRequest,
+) -> None:
+    clone_service.instance_exists.side_effect = [False, True]
+    clone_service.delete_clone.side_effect = requests.ConnectionError(
+        "TLS connection closed"
+    )
+    service = PitrOrchestratorService(
+        clone_service=clone_service, restore_service=restore_service
+    )
+
+    service.restore_questionnaire_from_point_in_time(pitr_request)
+
+    clone_service.delete_clone.assert_called_once()
 
 
 def test_retry_clone_name_is_truncated_to_cloud_sql_limit() -> None:
